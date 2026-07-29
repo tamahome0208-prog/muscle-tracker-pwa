@@ -208,3 +208,64 @@ test('比較ビューを開くと「定点観測」を獲得する', () => {
   });
   assert.ok(earned.includes('photo_compare'));
 });
+
+test('3週連続では「習慣化」を獲得しない', () => {
+  const base = { workouts: [], body: [], xp: { chest: 0, back: 0, shoulder: 0, leg: 0, arm: 0, abs: 0 }, comparedPhotos: false, badges: [] };
+  assert.ok(!checkBadges({ ...base, streak: 3 }).includes('habit_4w'));
+  assert.ok(checkBadges({ ...base, streak: 4 }).includes('habit_4w'));
+});
+
+test('総挙上量10トン未満では「10トン挙げた」を獲得しない', () => {
+  const base = { body: [], streak: 0, xp: { chest: 0, back: 0, shoulder: 0, leg: 0, arm: 0, abs: 0 }, comparedPhotos: false, badges: [] };
+  const under = [{ date: '2026-07-29', program: 'A', volume: 9999 }];
+  const over = [{ date: '2026-07-29', program: 'A', volume: 10000 }];
+  assert.ok(!checkBadges({ ...base, workouts: under }).includes('volume_10t'));
+  assert.ok(checkBadges({ ...base, workouts: over }).includes('volume_10t'));
+});
+
+test('body の配列順が逆でも開始時と最新で比較する', () => {
+  const earned = checkBadges({
+    workouts: [], streak: 0,
+    body: [
+      { date: '2026-07-29', weight: 60, muscle: 47, fatPct: 17 },
+      { date: '2026-04-29', weight: 60, muscle: 45, fatPct: 20 }
+    ],
+    xp: { chest: 0, back: 0, shoulder: 0, leg: 0, arm: 0, abs: 0 },
+    comparedPhotos: false, badges: []
+  });
+  assert.ok(earned.includes('abs_visible'));
+  assert.ok(earned.includes('muscle_plus2'));
+});
+
+test('胸と肩の両方がレベル3以上で「肩と胸に丸みが出た」を獲得する（片方だけでは獲得しない）', () => {
+  const base = { workouts: [], body: [], streak: 0, comparedPhotos: false, badges: [] };
+  const bothLv3 = checkBadges({ ...base, xp: { chest: 900, back: 0, shoulder: 900, leg: 0, arm: 0, abs: 0 } });
+  assert.ok(bothLv3.includes('shoulder_lv3'));
+
+  const onlyChest = checkBadges({ ...base, xp: { chest: 900, back: 0, shoulder: 0, leg: 0, arm: 0, abs: 0 } });
+  assert.ok(!onlyChest.includes('shoulder_lv3'));
+
+  const onlyShoulder = checkBadges({ ...base, xp: { chest: 0, back: 0, shoulder: 900, leg: 0, arm: 0, abs: 0 } });
+  assert.ok(!onlyShoulder.includes('shoulder_lv3'));
+});
+
+test('筋肉量+2.0kgで「中身が変わった」を獲得する（+1.9kgでは獲得しない）', () => {
+  const base = { workouts: [], streak: 0, xp: { chest: 0, back: 0, shoulder: 0, leg: 0, arm: 0, abs: 0 }, comparedPhotos: false, badges: [] };
+  const under = checkBadges({
+    ...base,
+    body: [
+      { date: '2026-04-29', weight: 60, muscle: 45, fatPct: 20 },
+      { date: '2026-07-29', weight: 60, muscle: 46.9, fatPct: 20 }
+    ]
+  });
+  assert.ok(!under.includes('muscle_plus2'));
+
+  const over = checkBadges({
+    ...base,
+    body: [
+      { date: '2026-04-29', weight: 60, muscle: 45, fatPct: 20 },
+      { date: '2026-07-29', weight: 60, muscle: 47, fatPct: 20 }
+    ]
+  });
+  assert.ok(over.includes('muscle_plus2'));
+});

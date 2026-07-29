@@ -1428,13 +1428,14 @@ git commit -m "feat: 食事集計と死守2項目の判定を追加"
 
 - [ ] **Step 1: 失敗するテストを書く**
 
-`test/game.test.js`（Task 8 の追記分まで含む最終形。Task 9 の称号テストは別途追記）:
+`test/game.test.js`（Task 8・9 の追記分まで含む最終形）:
 
 ```js
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PARTS, levelFromXp, addWorkoutXp, radarData } from '../js/game.js';
 import { calcStreak, isInitialPhase, initialPhaseStatus } from '../js/game.js';
+import { BADGES, checkBadges } from '../js/game.js';
 
 const EXERCISES = [
   { id: 'lat_pulldown', part: 'back' },
@@ -1584,6 +1585,122 @@ test('先週の朝プロテインは今週に数えない', () => {
 test('先週のジムの記録は今週のgymCountに混ざらない', () => {
   const workouts = [...gymWeek('2026-07-20', 3), ...gymWeek('2026-07-27', 1)];
   assert.equal(initialPhaseStatus(workouts, [], '2026-07-29').gymCount, 1);
+});
+
+test('称号は id・name・説明を持つ', () => {
+  for (const b of BADGES) {
+    assert.ok(b.id && b.name && b.desc);
+  }
+});
+
+test('初回トレーニングで「初心者ボーナス期」を獲得する', () => {
+  const earned = checkBadges({
+    workouts: [{ date: '2026-07-29', program: 'A', volume: 1000 }],
+    body: [], streak: 0, xp: { chest: 0, back: 0, shoulder: 0, leg: 0, arm: 0, abs: 0 },
+    comparedPhotos: false, badges: []
+  });
+  assert.ok(earned.includes('first_workout'));
+});
+
+test('すでに持っている称号は再度返さない', () => {
+  const earned = checkBadges({
+    workouts: [{ date: '2026-07-29', program: 'A', volume: 1000 }],
+    body: [], streak: 0, xp: { chest: 0, back: 0, shoulder: 0, leg: 0, arm: 0, abs: 0 },
+    comparedPhotos: false, badges: ['first_workout']
+  });
+  assert.ok(!earned.includes('first_workout'));
+});
+
+test('4週連続で「習慣化」を獲得する', () => {
+  const earned = checkBadges({
+    workouts: [], body: [], streak: 4,
+    xp: { chest: 0, back: 0, shoulder: 0, leg: 0, arm: 0, abs: 0 },
+    comparedPhotos: false, badges: []
+  });
+  assert.ok(earned.includes('habit_4w'));
+});
+
+test('体脂肪率が3%下がると「腹筋上部が割れた」を獲得する', () => {
+  const earned = checkBadges({
+    workouts: [], streak: 0,
+    body: [
+      { date: '2026-04-29', weight: 60, muscle: 45, fatPct: 20 },
+      { date: '2026-07-29', weight: 60, muscle: 47, fatPct: 17 }
+    ],
+    xp: { chest: 0, back: 0, shoulder: 0, leg: 0, arm: 0, abs: 0 },
+    comparedPhotos: false, badges: []
+  });
+  assert.ok(earned.includes('abs_visible'));
+});
+
+test('比較ビューを開くと「定点観測」を獲得する', () => {
+  const earned = checkBadges({
+    workouts: [], body: [], streak: 0,
+    xp: { chest: 0, back: 0, shoulder: 0, leg: 0, arm: 0, abs: 0 },
+    comparedPhotos: true, badges: []
+  });
+  assert.ok(earned.includes('photo_compare'));
+});
+
+test('3週連続では「習慣化」を獲得しない', () => {
+  const base = { workouts: [], body: [], xp: { chest: 0, back: 0, shoulder: 0, leg: 0, arm: 0, abs: 0 }, comparedPhotos: false, badges: [] };
+  assert.ok(!checkBadges({ ...base, streak: 3 }).includes('habit_4w'));
+  assert.ok(checkBadges({ ...base, streak: 4 }).includes('habit_4w'));
+});
+
+test('総挙上量10トン未満では「10トン挙げた」を獲得しない', () => {
+  const base = { body: [], streak: 0, xp: { chest: 0, back: 0, shoulder: 0, leg: 0, arm: 0, abs: 0 }, comparedPhotos: false, badges: [] };
+  const under = [{ date: '2026-07-29', program: 'A', volume: 9999 }];
+  const over = [{ date: '2026-07-29', program: 'A', volume: 10000 }];
+  assert.ok(!checkBadges({ ...base, workouts: under }).includes('volume_10t'));
+  assert.ok(checkBadges({ ...base, workouts: over }).includes('volume_10t'));
+});
+
+test('body の配列順が逆でも開始時と最新で比較する', () => {
+  const earned = checkBadges({
+    workouts: [], streak: 0,
+    body: [
+      { date: '2026-07-29', weight: 60, muscle: 47, fatPct: 17 },
+      { date: '2026-04-29', weight: 60, muscle: 45, fatPct: 20 }
+    ],
+    xp: { chest: 0, back: 0, shoulder: 0, leg: 0, arm: 0, abs: 0 },
+    comparedPhotos: false, badges: []
+  });
+  assert.ok(earned.includes('abs_visible'));
+  assert.ok(earned.includes('muscle_plus2'));
+});
+
+test('胸と肩の両方がレベル3以上で「肩と胸に丸みが出た」を獲得する（片方だけでは獲得しない）', () => {
+  const base = { workouts: [], body: [], streak: 0, comparedPhotos: false, badges: [] };
+  const bothLv3 = checkBadges({ ...base, xp: { chest: 900, back: 0, shoulder: 900, leg: 0, arm: 0, abs: 0 } });
+  assert.ok(bothLv3.includes('shoulder_lv3'));
+
+  const onlyChest = checkBadges({ ...base, xp: { chest: 900, back: 0, shoulder: 0, leg: 0, arm: 0, abs: 0 } });
+  assert.ok(!onlyChest.includes('shoulder_lv3'));
+
+  const onlyShoulder = checkBadges({ ...base, xp: { chest: 0, back: 0, shoulder: 900, leg: 0, arm: 0, abs: 0 } });
+  assert.ok(!onlyShoulder.includes('shoulder_lv3'));
+});
+
+test('筋肉量+2.0kgで「中身が変わった」を獲得する（+1.9kgでは獲得しない）', () => {
+  const base = { workouts: [], streak: 0, xp: { chest: 0, back: 0, shoulder: 0, leg: 0, arm: 0, abs: 0 }, comparedPhotos: false, badges: [] };
+  const under = checkBadges({
+    ...base,
+    body: [
+      { date: '2026-04-29', weight: 60, muscle: 45, fatPct: 20 },
+      { date: '2026-07-29', weight: 60, muscle: 46.9, fatPct: 20 }
+    ]
+  });
+  assert.ok(!under.includes('muscle_plus2'));
+
+  const over = checkBadges({
+    ...base,
+    body: [
+      { date: '2026-04-29', weight: 60, muscle: 45, fatPct: 20 },
+      { date: '2026-07-29', weight: 60, muscle: 47, fatPct: 20 }
+    ]
+  });
+  assert.ok(over.includes('muscle_plus2'));
 });
 ```
 
@@ -1936,9 +2053,22 @@ export const BADGES = [
 /**
  * 未獲得のうち、条件を満たした称号IDを返す。
  * state: { workouts, body, streak, xp, comparedPhotos, badges }
+ *
+ * body / workouts は storage / importAll を経由して届く未検証データのため
+ * （このファイルの他の集計関数と同じ方針で）不正なレコードは無視し、例外は投げない。
+ * fatPct・muscle・volume は toNum で防御的に丸める: NaN や欠損値のまま差分を
+ * 取ると `NaN >= 3` は常に false になるため実害は薄いが、文字列が紛れ込むと
+ * `'20' - '17'` のように意図せず動く/動かないケースがあり、丸めて統一しておく方が安全。
+ * body の日付は文字列比較でソートするため、不正な形式の日付が混ざると並び順が
+ * 保証できない。ここでは date が YYYY-MM-DD 形式のレコードだけを対象にする。
+ * badges は game オブジェクト内のネストしたフィールドであり、store.js の
+ * deepMerge は配列型のトップレベルキー(workouts/body等)しか配列性を検証しない
+ * ため、ネストした badges が不正なJSON編集等で配列以外(文字列・数値等)に
+ * 壊れていてもそのまま届き得る。Array.isArray で確認し、そうでなければ
+ * 「何も所持していない」として扱う（Set(非配列) は例外を投げるため）。
  */
 export function checkBadges(state) {
-  const owned = new Set(state.badges ?? []);
+  const owned = new Set(Array.isArray(state.badges) ? state.badges : []);
   const earned = [];
   const add = (id, condition) => {
     if (condition && !owned.has(id)) earned.push(id);
@@ -1949,15 +2079,17 @@ export function checkBadges(state) {
   add('shoulder_lv3', levelFromXp(state.xp?.chest ?? 0) >= 3 && levelFromXp(state.xp?.shoulder ?? 0) >= 3);
   add('photo_compare', state.comparedPhotos === true);
 
-  const body = [...(state.body ?? [])].sort((a, b) => (a.date < b.date ? -1 : 1));
+  const body = (state.body ?? [])
+    .filter((b) => typeof b?.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(b.date))
+    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
   if (body.length >= 2) {
     const first = body[0];
     const last = body[body.length - 1];
-    add('abs_visible', first.fatPct - last.fatPct >= 3);
-    add('muscle_plus2', last.muscle - first.muscle >= 2);
+    add('abs_visible', toNum(first.fatPct) - toNum(last.fatPct) >= 3);
+    add('muscle_plus2', toNum(last.muscle) - toNum(first.muscle) >= 2);
   }
 
-  const totalVolume = (state.workouts ?? []).reduce((sum, w) => sum + (w.volume ?? 0), 0);
+  const totalVolume = (state.workouts ?? []).reduce((sum, w) => sum + toNum(w?.volume), 0);
   add('volume_10t', totalVolume >= 10000);
 
   return earned;
@@ -1967,7 +2099,7 @@ export function checkBadges(state) {
 - [ ] **Step 4: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（累計91件）
+Expected: PASS（累計96件）
 
 - [ ] **Step 5: Commit**
 
@@ -2078,7 +2210,7 @@ export function bodySeries(body) {
 - [ ] **Step 4: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（累計97件）
+Expected: PASS（累計102件）
 
 - [ ] **Step 5: Commit**
 
@@ -4394,7 +4526,7 @@ python -m http.server 8080    # ローカル確認
 - [ ] **Step 3: 全テストを流して確認**
 
 Run: `npm test`
-Expected: PASS（累計97件）、失敗0件
+Expected: PASS（累計102件）、失敗0件
 
 - [ ] **Step 4: Commit**
 

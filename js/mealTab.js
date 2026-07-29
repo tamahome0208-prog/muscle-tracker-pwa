@@ -1,5 +1,6 @@
 import { $, onShow, toast, todayStr, nowStr, newId } from './ui.js';
 import { dayTotals, achievement, sortFoodsByUse, bumpFoodUse } from './nutrition.js';
+import { isBarcodeSupported, scanJan, lookupJan } from './barcode.js';
 
 let store;
 
@@ -110,6 +111,13 @@ export function renderMealTab() {
   };
 
   $('#btnManual').addEventListener('click', openManualDialog);
+
+  const barcodeBtn = $('#btnBarcode');
+  if (!isBarcodeSupported()) {
+    barcodeBtn.classList.add('hidden');
+  } else {
+    barcodeBtn.addEventListener('click', scanBarcode);
+  }
 }
 
 function openManualDialog() {
@@ -122,4 +130,56 @@ function openManualDialog() {
     return;
   }
   addItems([{ name, kcal, protein }], 'manual');
+}
+
+/** バーコードを読み、未知の商品は1回だけ手入力してマイメニューに育てる */
+async function scanBarcode() {
+  const video = document.createElement('video');
+  video.playsInline = true;
+  video.muted = true;
+  let mediaStream;
+  try {
+    mediaStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+  } catch {
+    toast('カメラを使えません');
+    return;
+  }
+  video.srcObject = mediaStream;
+  await video.play();
+
+  const stage = document.createElement('div');
+  stage.className = 'card photo-stage';
+  stage.appendChild(video);
+  $('#tab-meal').prepend(stage);
+  toast('バーコードをかざしてください');
+
+  const jan = await scanJan(video);
+  mediaStream.getTracks().forEach((t) => t.stop());
+  stage.remove();
+
+  if (!jan) {
+    toast('読み取れませんでした');
+    return;
+  }
+
+  const hit = await lookupJan(jan, store.get('foods'), store.get('settings').useOpenFoodFacts);
+  if (hit) {
+    if (hit.source === 'openfoodfacts') {
+      store.set('foods', [...store.get('foods'), hit.food]);
+    }
+    addFoodById(hit.food.id);
+    return;
+  }
+
+  const name = prompt(`未登録の商品です（${jan}）\n品名を入力すると次回から自動登録されます`);
+  if (!name) return;
+  const kcal = Number(prompt('カロリー(kcal)', '0'));
+  const protein = Number(prompt('タンパク質(g)', '0'));
+  if (Number.isNaN(kcal) || Number.isNaN(protein)) {
+    toast('数値が読めませんでした');
+    return;
+  }
+  const food = { id: `jan_${jan}`, jan, name, unit: '個', kcal, protein, useCount: 0 };
+  store.set('foods', [...store.get('foods'), food]);
+  addFoodById(food.id);
 }

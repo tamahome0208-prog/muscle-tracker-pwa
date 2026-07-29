@@ -1,4 +1,4 @@
-import { calcVolume } from './workout.js';
+import { calcVolume, weekKey } from './workout.js';
 
 export const PARTS = ['chest', 'back', 'shoulder', 'leg', 'arm', 'abs'];
 
@@ -49,4 +49,77 @@ export function radarData(xpMap) {
     xp: toNum(xpMap?.[part]),
     level: levelFromXp(xpMap?.[part])
   }));
+}
+
+const GYM_PER_WEEK = 3;
+
+function shiftWeeks(dateStr, delta) {
+  const d = new Date(dateStr + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + delta * 7);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * 連続週数。判定条件はジム3回のみ。
+ * 食事や写真を条件に足すと切れやすくなり、ストリークの意味が失われるため意図的に含めない。
+ * 進行中の今週はまだ未達でも切らない（達成していればカウントする）。
+ */
+export function calcStreak(workouts, todayStr) {
+  const counts = new Map();
+  for (const w of workouts) {
+    if (typeof w.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(w.date)) continue;
+    const key = weekKey(w.date);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  const thisWeek = weekKey(todayStr);
+  let streak = 0;
+  let cursor = todayStr;
+  let first = true;
+  while (true) {
+    const key = weekKey(cursor);
+    const count = counts.get(key) ?? 0;
+    if (count >= GYM_PER_WEEK) {
+      streak += 1;
+    } else if (first && key === thisWeek) {
+      // 進行中の週は未達でも遡り続ける
+    } else {
+      break;
+    }
+    first = false;
+    cursor = shiftWeeks(cursor, -1);
+  }
+  return streak;
+}
+
+/** 開始から28日未満なら初期モード */
+export function isInitialPhase(startDate, todayStr) {
+  if (!startDate) return false;
+  const days = (new Date(todayStr + 'T00:00:00Z') - new Date(startDate + 'T00:00:00Z')) / 86400000;
+  return days < 28;
+}
+
+/**
+ * 初期4週間で追跡する2項目だけを返す。
+ * 「まず週3ジムと朝プロテインだけ習慣化できれば、あとは自動的に進む」という方針に対応。
+ */
+export function initialPhaseStatus(workouts, meals, todayStr) {
+  const thisWeek = weekKey(todayStr);
+  const gymCount = (workouts ?? []).filter((w) => {
+    if (typeof w.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(w.date)) return false;
+    return weekKey(w.date) === thisWeek;
+  }).length;
+
+  const proteinMornings = new Set();
+  for (const meal of meals ?? []) {
+    if (typeof meal?.datetime !== 'string') continue;
+    const [date, time = ''] = meal.datetime.split('T');
+    if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+    if (weekKey(date) !== thisWeek) continue;
+    const hour = Number(time.slice(0, 2));
+    if (Number.isNaN(hour) || hour >= 11) continue;
+    const hasProtein = (meal.items ?? []).some((i) => typeof i?.name === 'string' && i.name.includes('プロテイン'));
+    if (hasProtein) proteinMornings.add(date);
+  }
+
+  return { gymCount, gymDone: gymCount >= GYM_PER_WEEK, proteinMornings: proteinMornings.size };
 }

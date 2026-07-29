@@ -1428,7 +1428,7 @@ git commit -m "feat: 食事集計と死守2項目の判定を追加"
 
 - [ ] **Step 1: 失敗するテストを書く**
 
-`test/game.test.js`:
+`test/game.test.js`（Task 8・9 で追記するテストは含まない）:
 
 ```js
 import test from 'node:test';
@@ -1489,6 +1489,14 @@ test('レーダー用データは6部位すべてのレベルを返す', () => {
   assert.equal(data.find((d) => d.part === 'back').level, 3);
   assert.equal(data.find((d) => d.part === 'chest').label, '胸');
 });
+
+test('xpMap に無い部位もレベル0で必ず含める（弱点部位が消えない）', () => {
+  const data = radarData({ back: 400 });
+  assert.equal(data.length, 6);
+  assert.deepEqual(data.map((d) => d.part), ['chest', 'back', 'shoulder', 'leg', 'arm', 'abs']);
+  assert.equal(data.find((d) => d.part === 'leg').level, 0);
+  assert.equal(data.find((d) => d.part === 'leg').xp, 0);
+});
 ```
 
 - [ ] **Step 2: テストを実行して失敗を確認**
@@ -1507,19 +1515,37 @@ export const PART_LABELS = {
   chest: '胸', back: '背中', shoulder: '肩', leg: '脚', arm: '腕', abs: '腹'
 };
 
-/** レベルは固定式。バランス調整に時間を溶かさないため意図的に単純化している */
-export function levelFromXp(xp) {
-  return Math.floor(Math.sqrt(xp / 100));
+/**
+ * 数値化できない値・負値は0として扱う（js/nutrition.js の toNum と同じ防御的丸め）。
+ * XPは加算を繰り返しながら永続化されるため、1回だけ紛れ込んだ NaN や不正な型の値を
+ * そのまま伝播させると、以降の加算・レベル計算が恒久的に壊れる
+ * （JSON.stringify(NaN) は null になり localStorage 上でも消えない）。
+ */
+function toNum(v) {
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? n : 0;
 }
 
-/** 部位XPに1回分のトレーニングを加算した新しいオブジェクトを返す */
+/** レベルは固定式。バランス調整に時間を溶かさないため意図的に単純化している */
+export function levelFromXp(xp) {
+  return Math.floor(Math.sqrt(toNum(xp) / 100));
+}
+
+/**
+ * 部位XPに1回分のトレーニングを加算した新しいオブジェクトを返す。
+ * 加算前の既存値も toNum で防御的に丸める: xpMap に既に NaN や文字列が
+ * 紛れ込んでいた場合、`(next[part] ?? 0)` のような null/undefined のみを
+ * 見るガードだと NaN はそのまま伝播し、文字列は `+` で連結されてしまう
+ * （例: 'oops' + 35 === 'oops35'）。ここで0に丸めることで、過去に紛れ込んだ
+ * 壊れた値からも次回の加算で回復できるようにしている。
+ */
 export function addWorkoutXp(xpMap, workout, exercises) {
   const partOf = new Map(exercises.map((e) => [e.id, e.part]));
   const next = { ...xpMap };
   for (const set of workout.sets ?? []) {
     const part = partOf.get(set.exId);
     if (!part || !PARTS.includes(part)) continue;
-    next[part] = (next[part] ?? 0) + calcVolume([set]) / 10;
+    next[part] = toNum(next[part]) + calcVolume([set]) / 10;
   }
   return next;
 }
@@ -1529,8 +1555,8 @@ export function radarData(xpMap) {
   return PARTS.map((part) => ({
     part,
     label: PART_LABELS[part],
-    xp: xpMap[part] ?? 0,
-    level: levelFromXp(xpMap[part] ?? 0)
+    xp: toNum(xpMap?.[part]),
+    level: levelFromXp(xpMap?.[part])
   }));
 }
 ```
@@ -1538,7 +1564,7 @@ export function radarData(xpMap) {
 - [ ] **Step 4: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（累計74件）
+Expected: PASS（累計75件）
 
 - [ ] **Step 5: Commit**
 
@@ -1716,7 +1742,7 @@ export function initialPhaseStatus(workouts, meals, todayStr) {
 - [ ] **Step 4: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（累計81件）
+Expected: PASS（累計82件）
 
 - [ ] **Step 5: Commit**
 
@@ -1847,7 +1873,7 @@ export function checkBadges(state) {
 - [ ] **Step 4: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（累計87件）
+Expected: PASS（累計88件）
 
 - [ ] **Step 5: Commit**
 
@@ -1958,7 +1984,7 @@ export function bodySeries(body) {
 - [ ] **Step 4: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（累計93件）
+Expected: PASS（累計94件）
 
 - [ ] **Step 5: Commit**
 
@@ -4274,7 +4300,7 @@ python -m http.server 8080    # ローカル確認
 - [ ] **Step 3: 全テストを流して確認**
 
 Run: `npm test`
-Expected: PASS（累計93件）、失敗0件
+Expected: PASS（累計94件）、失敗0件
 
 - [ ] **Step 4: Commit**
 

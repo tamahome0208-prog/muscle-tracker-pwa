@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createStore, DEFAULTS } from '../js/store.js';
+import { createStore } from '../js/store.js';
 import { memoryStorage } from './helpers.js';
 
 test('初回はデフォルト値を返す', () => {
@@ -51,4 +51,137 @@ test('importAll は不正なJSONで例外を投げ、既存データを壊さな
   store.set('meals', [{ id: 'keep' }]);
   assert.throws(() => store.importAll('壊れた'), /インポート/);
   assert.equal(store.get('meals')[0].id, 'keep');
+});
+
+// --- 以下、コード品質レビューで指摘された観点の回帰テスト ---
+
+test('set は同じ storage を渡した別インスタンスからも読み戻せる(実際に永続化される)', () => {
+  const storage = memoryStorage();
+  const store1 = createStore(storage);
+  store1.set('workouts', [{ id: 'w1' }]);
+  const store2 = createStore(storage);
+  assert.equal(store2.get('workouts').length, 1);
+  assert.equal(store2.get('workouts')[0].id, 'w1');
+});
+
+test('set は storage の生JSONにも正しい形で書き込む', () => {
+  const storage = memoryStorage();
+  const store = createStore(storage);
+  store.set('workouts', [{ id: 'w1' }]);
+  assert.deepEqual(JSON.parse(storage.getItem('mt.workouts')), [{ id: 'w1' }]);
+});
+
+test('validate() の修復は storage 側にも反映される', () => {
+  const storage = memoryStorage({ 'mt.workouts': '{{{壊れたJSON' });
+  const store = createStore(storage);
+  store.validate();
+  assert.deepEqual(JSON.parse(storage.getItem('mt.workouts')), []);
+});
+
+test('read-modify-write パターンを別インスタンスを跨いで繰り返しても一貫した結果になる', () => {
+  const storage = memoryStorage();
+  const store1 = createStore(storage);
+  const w1 = store1.get('workouts');
+  w1.push({ id: 'w1' });
+  store1.set('workouts', w1);
+
+  const store2 = createStore(storage);
+  const w2 = store2.get('workouts');
+  w2.push({ id: 'w2' });
+  store2.set('workouts', w2);
+
+  const store3 = createStore(storage);
+  assert.equal(store3.get('workouts').length, 2);
+});
+
+test('get で返した値を mutate しても set しない限り保存されない(ゴーストデータ防止)', () => {
+  const storage = memoryStorage();
+  const store = createStore(storage);
+  const workouts = store.get('workouts');
+  workouts.push({ id: 'ghost' });
+  assert.equal(store.get('workouts').length, 0);
+  assert.equal(storage.getItem('mt.workouts'), null);
+});
+
+test('setItem が失敗した場合、キャッシュも更新されない', () => {
+  const storage = memoryStorage();
+  const realSetItem = storage.setItem.bind(storage);
+  let shouldFail = false;
+  storage.setItem = (k, v) => {
+    if (shouldFail) throw new Error('QuotaExceededError');
+    realSetItem(k, v);
+  };
+  const store = createStore(storage);
+  store.set('workouts', [{ id: 'w1' }]);
+  shouldFail = true;
+  assert.throws(() => store.set('workouts', [{ id: 'w1' }, { id: 'w2' }]));
+  assert.equal(store.get('workouts').length, 1);
+});
+
+test('部分的な profile を保存してもデフォルトのネスト項目が再帰的に補われる', () => {
+  const storage = memoryStorage({
+    'mt.profile': JSON.stringify({ targets: { protein: 120 } })
+  });
+  const store = createStore(storage);
+  const profile = store.get('profile');
+  assert.equal(profile.targets.protein, 120);
+  assert.equal(profile.targets.kcalFloor, 1500);
+  assert.equal(profile.height, 162);
+});
+
+test('importAll は不正な形式のキーを含む場合、何も書き込まずに例外を投げる', () => {
+  const storage = memoryStorage();
+  const store = createStore(storage);
+  store.set('meals', [{ id: 'keep' }]);
+  assert.throws(
+    () => store.importAll(JSON.stringify({ workouts: 'garbage', meals: [{ id: 'new' }] })),
+    /インポート/
+  );
+  assert.equal(store.get('meals')[0].id, 'keep');
+  assert.equal(store.get('workouts').length, 0);
+});
+
+test('importAll 途中で setItem が失敗したら書き込み済みの分も元に戻す', () => {
+  const storage = memoryStorage();
+  const store = createStore(storage);
+  store.set('workouts', [{ id: 'old-w' }]);
+  store.set('meals', [{ id: 'old-m' }]);
+
+  const realSetItem = storage.setItem.bind(storage);
+  let failOnMeals = false;
+  storage.setItem = (k, v) => {
+    if (failOnMeals && k === 'mt.meals') throw new Error('QuotaExceededError');
+    realSetItem(k, v);
+  };
+
+  failOnMeals = true;
+  assert.throws(() => store.importAll(JSON.stringify({
+    workouts: [{ id: 'new-w' }],
+    meals: [{ id: 'new-m' }]
+  })));
+  failOnMeals = false;
+
+  assert.equal(store.get('workouts')[0].id, 'old-w');
+  assert.equal(store.get('meals')[0].id, 'old-m');
+});
+
+test('get/set に未知のキーを渡すと例外になる', () => {
+  const store = createStore(memoryStorage());
+  assert.throws(() => store.get('unknown'), /未知のキー/);
+  assert.throws(() => store.set('unknown', {}), /未知のキー/);
+});
+
+test('exportAll は geminiKey を含めない', () => {
+  const store = createStore(memoryStorage());
+  store.set('settings', { geminiKey: 'secret-key', useOpenFoodFacts: true, photoReminder: true });
+  const json = JSON.parse(store.exportAll());
+  assert.equal(json.settings.geminiKey, '');
+});
+
+test('importAll で geminiKey が空なら端末側の既存キーを維持する', () => {
+  const store = createStore(memoryStorage());
+  store.set('settings', { geminiKey: 'existing-key', useOpenFoodFacts: true, photoReminder: true });
+  store.importAll(JSON.stringify({ settings: { geminiKey: '', useOpenFoodFacts: false, photoReminder: false } }));
+  assert.equal(store.get('settings').geminiKey, 'existing-key');
+  assert.equal(store.get('settings').useOpenFoodFacts, false);
 });

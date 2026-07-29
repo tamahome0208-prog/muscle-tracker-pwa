@@ -44,6 +44,9 @@
 - Create: `package.json`
 - Create: `.gitignore`
 - Create: `test/helpers.js`
+- Test: `test/helpers.test.js`
+
+**前提:** このリポジトリには `git config user.name` / `user.email` がローカル設定済み。未設定ならコミットできないので先に確認する。
 
 - [ ] **Step 1: `package.json` を作る**
 
@@ -54,7 +57,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test test/"
+    "test": "node --test \"test/**/*.test.js\""
   }
 }
 ```
@@ -81,15 +84,49 @@ export function memoryStorage(initial = {}) {
 }
 ```
 
-- [ ] **Step 4: テストが動くことを確認**
+- [ ] **Step 4: `test/helpers.test.js` を作る**
+
+スタブも動作を保証すべきコードなので、テストを書く。
+
+**テスト実行コマンドの注意（検証済み）:** Node v24.15.0 (Windows) では `node --test test/` のように
+**ディレクトリを引数に渡すと中身に関係なく `MODULE_NOT_FOUND` で失敗する**。
+引数なしの `node --test` は動くが、テストではない `test/helpers.js` まで「0アサーションのテスト」として数えてしまう。
+そのため `package.json` ではグロブ形式 `node --test "test/**/*.test.js"` を使う（ダブルクォートは sh でのグロブ展開を防ぐため必須）。
+
+```js
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { memoryStorage } from './helpers.js';
+
+test('setItem した値を getItem で読める', () => {
+  const s = memoryStorage();
+  s.setItem('k', 'v');
+  assert.equal(s.getItem('k'), 'v');
+});
+
+test('未設定のキーは null を返す', () => {
+  assert.equal(memoryStorage().getItem('無い'), null);
+});
+
+test('初期値つきで作れて length が件数を返す', () => {
+  const s = memoryStorage({ a: '1', b: '2' });
+  assert.equal(s.length, 2);
+  assert.equal(s.getItem('a'), '1');
+  s.removeItem('a');
+  assert.equal(s.length, 1);
+  assert.equal(s.getItem('a'), null);
+});
+```
+
+- [ ] **Step 5: テストが通ることを確認**
 
 Run: `npm test`
-Expected: `# tests 0` と表示され、exit code 0（テストファイルがまだ無いので0件で成功）
+Expected: PASS（3件）、exit code 0
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add package.json .gitignore test/helpers.js
+git add package.json .gitignore test/helpers.js test/helpers.test.js
 git commit -m "chore: プロジェクト初期化とテスト環境"
 ```
 
@@ -282,7 +319,7 @@ export function createStore(storage = globalThis.localStorage) {
 - [ ] **Step 4: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（6件）
+Expected: PASS（累計9件）
 
 - [ ] **Step 5: Commit**
 
@@ -372,7 +409,7 @@ Expected: FAIL - `ENOENT ... data/exercises.json`
 - [ ] **Step 4: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（Task 2 の6件＋今回の3件＝9件）
+Expected: PASS（累計12件）
 
 - [ ] **Step 5: Commit**
 
@@ -525,7 +562,7 @@ export function lastSetsFor(workouts, exId) {
 - [ ] **Step 4: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（累計17件）
+Expected: PASS（累計20件）
 
 - [ ] **Step 5: Commit**
 
@@ -639,7 +676,7 @@ export function warnsBadmintonAfterLegs(workouts, badmintonDate) {
 - [ ] **Step 4: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（累計27件）
+Expected: PASS（累計30件）
 
 - [ ] **Step 5: Commit**
 
@@ -834,7 +871,7 @@ export function bumpFoodUse(foods, foodId) {
 - [ ] **Step 5: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（累計37件）
+Expected: PASS（累計40件）
 
 - [ ] **Step 6: Commit**
 
@@ -963,7 +1000,7 @@ export function radarData(xpMap) {
 - [ ] **Step 4: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（累計43件）
+Expected: PASS（累計46件）
 
 - [ ] **Step 5: Commit**
 
@@ -1141,7 +1178,7 @@ export function initialPhaseStatus(workouts, meals, todayStr) {
 - [ ] **Step 4: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（累計50件）
+Expected: PASS（累計53件）
 
 - [ ] **Step 5: Commit**
 
@@ -1272,7 +1309,7 @@ export function checkBadges(state) {
 - [ ] **Step 4: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（累計56件）
+Expected: PASS（累計59件）
 
 - [ ] **Step 5: Commit**
 
@@ -1383,7 +1420,7 @@ export function bodySeries(body) {
 - [ ] **Step 4: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（累計62件）
+Expected: PASS（累計65件）
 
 - [ ] **Step 5: Commit**
 
@@ -3681,7 +3718,7 @@ python -m http.server 8080    # ローカル確認
 - [ ] **Step 3: 全テストを流して確認**
 
 Run: `npm test`
-Expected: PASS（累計62件）、失敗0件
+Expected: PASS（累計65件）、失敗0件
 
 - [ ] **Step 4: Commit**
 

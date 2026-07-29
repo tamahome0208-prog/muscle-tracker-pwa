@@ -1,6 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { nextProgram, calcVolume, weeklyVolume, lastSetsFor, isPB, updateBests, warnsBadmintonAfterLegs } from '../js/workout.js';
+import {
+  nextProgram,
+  calcVolume,
+  weeklyVolume,
+  lastSetFor,
+  isPB,
+  updateBests,
+  warnsBadmintonAfterLegs,
+  weekKey
+} from '../js/workout.js';
 
 test('記録が無ければ最初はA', () => {
   assert.equal(nextProgram([]), 'A');
@@ -18,6 +27,14 @@ test('日付が最新の記録を基準にする（配列順に依存しない�
     { date: '2026-07-20', program: 'C' }
   ];
   assert.equal(nextProgram(workouts), 'C');
+});
+
+test('未知のprogramの記録は無視して直近の既知programから継続する', () => {
+  const workouts = [
+    { date: '2026-07-27', program: 'A' },
+    { date: '2026-07-29', program: undefined }
+  ];
+  assert.equal(nextProgram(workouts), 'B');
 });
 
 test('総挙上量は 重量×回数 の合計', () => {
@@ -38,6 +55,14 @@ test('自重（0kg）は回数×体重換算せず0として扱う', () => {
   assert.equal(calcVolume([{ exId: 'ab_coaster', weight: 0, reps: 15 }]), 0);
 });
 
+test('calcVolume は不正な値を0として扱いNaNを伝播させない', () => {
+  const sets = [
+    { exId: 'lat_pulldown', weight: 35, reps: 10 },
+    { exId: 'lat_pulldown', weight: undefined, reps: 8 }
+  ];
+  assert.equal(calcVolume(sets), 350);
+});
+
 test('週次の総挙上量を月曜始まりで集計する', () => {
   const workouts = [
     { date: '2026-07-27', program: 'A', volume: 1000 }, // 月
@@ -50,13 +75,53 @@ test('週次の総挙上量を月曜始まりで集計する', () => {
   assert.equal(weeks[1].volume, 900);
 });
 
-test('前回のセットを種目ごとに引ける', () => {
+test('weeklyVolume は volume が無い記録を sets から計算して集計する', () => {
+  const workouts = [
+    { date: '2026-07-27', program: 'A', sets: [{ exId: 'seated_row', weight: 30, reps: 10 }] }
+  ];
+  const weeks = weeklyVolume(workouts);
+  assert.equal(weeks.length, 1);
+  assert.equal(weeks[0].volume, 300);
+});
+
+test('weeklyVolume は日付が不正な記録を例外を投げずに除外する', () => {
+  const workouts = [
+    { date: '2026-07-27', program: 'A', volume: 1000 },
+    { date: undefined, program: 'B', volume: 99999 }
+  ];
+  const weeks = weeklyVolume(workouts);
+  assert.equal(weeks.length, 1);
+  assert.equal(weeks[0].volume, 1000);
+});
+
+test('weekKey は月曜始まりのISO週番号を返す', () => {
+  assert.equal(weekKey('2025-12-29'), '2026-W01');
+  assert.equal(weekKey('2026-07-29'), '2026-W31');
+  assert.equal(weekKey('2026-12-31'), '2026-W53');
+  assert.equal(weekKey('2027-01-01'), '2026-W53');
+  assert.equal(weekKey('2027-01-04'), '2027-W01');
+});
+
+test('weekKey は不正な形式の日付で例外を投げる', () => {
+  assert.throws(() => weekKey(undefined));
+  assert.throws(() => weekKey('2026-7-9')); // ゼロ埋めなし
+});
+
+test('前回のセットを種目ごとに引ける（同一セッション内では最後のセットを返す）', () => {
   const workouts = [
     { date: '2026-07-20', program: 'B', sets: [{ exId: 'seated_row', weight: 30, reps: 10 }] },
-    { date: '2026-07-27', program: 'B', sets: [{ exId: 'seated_row', weight: 32.5, reps: 12 }] }
+    {
+      date: '2026-07-27',
+      program: 'B',
+      sets: [
+        { exId: 'seated_row', weight: 32.5, reps: 12 },
+        { exId: 'seated_row', weight: 32.5, reps: 10 },
+        { exId: 'seated_row', weight: 35, reps: 8 }
+      ]
+    }
   ];
-  assert.deepEqual(lastSetsFor(workouts, 'seated_row'), { weight: 32.5, reps: 12 });
-  assert.equal(lastSetsFor(workouts, 'leg_press'), null);
+  assert.deepEqual(lastSetFor(workouts, 'seated_row'), { weight: 35, reps: 8 });
+  assert.equal(lastSetFor(workouts, 'leg_press'), null);
 });
 
 test('記録が無ければ最初のセットはPB', () => {
@@ -98,6 +163,16 @@ test('PBでなければ updateBests は同じ内容を返す', () => {
   assert.notEqual(next, bests); // 内容は同じでも新しいオブジェクトを返す
 });
 
+test('updateBests は他種目のPBを保持する', () => {
+  const bests = {
+    seated_row: { weight: 30, reps: 10, date: '2026-07-20' },
+    lat_pulldown: { weight: 40, reps: 8, date: '2026-07-15' }
+  };
+  const next = updateBests(bests, 'seated_row', 32.5, 8, '2026-07-29');
+  assert.deepEqual(next.lat_pulldown, bests.lat_pulldown);
+  assert.deepEqual(next.seated_row, { weight: 32.5, reps: 8, date: '2026-07-29' });
+});
+
 test('脚の日（C）の翌日にバドミントンを入れると警告する', () => {
   const workouts = [{ date: '2026-07-29', program: 'C' }];
   assert.equal(warnsBadmintonAfterLegs(workouts, '2026-07-30'), true);
@@ -111,4 +186,14 @@ test('脚の日の2日後なら警告しない', () => {
 test('AやBの翌日は警告しない', () => {
   const workouts = [{ date: '2026-07-29', program: 'A' }];
   assert.equal(warnsBadmintonAfterLegs(workouts, '2026-07-30'), false);
+});
+
+test('月をまたぐ脚の日の翌日も警告する', () => {
+  const workouts = [{ date: '2026-07-31', program: 'C' }];
+  assert.equal(warnsBadmintonAfterLegs(workouts, '2026-08-01'), true);
+});
+
+test('年をまたぐ脚の日の翌日も警告する', () => {
+  const workouts = [{ date: '2026-12-31', program: 'C' }];
+  assert.equal(warnsBadmintonAfterLegs(workouts, '2027-01-01'), true);
 });

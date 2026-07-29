@@ -1,0 +1,136 @@
+export const PROGRAMS = ['A', 'B', 'C'];
+
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * 日付文字列 'YYYY-MM-DD' の週キー（月曜始まり、ISO 8601週番号）を返す。例: '2026-W31'
+ *
+ * 不正な形式の入力（undefined・ゼロ埋め無しなど）は例外を投げる。これはプログラマの
+ * ミスを黙って通さないための設計判断: 以前は不正入力で 'NaN-WNaN' のような無意味な
+ * キーを返しており、文字列比較では 'N' > '2' のため週次集計の並びの最後（＝「最新週」
+ * として画面に出る位置）に紛れ込んでしまっていた。
+ *
+ * 一方 weeklyVolume() はこの関数と非対称に、不正な日付を持つ記録を例外を投げずに
+ * 除外する。weeklyVolume はインポートされた記録など信頼できない外部データが入りうる
+ * 境界であり、1件の壊れた記録のせいで週次集計全体が例外で落ちるのは避けたいため。
+ */
+export function weekKey(dateStr) {
+  if (typeof dateStr !== 'string' || !DATE_RE.test(dateStr)) {
+    throw new Error(`weekKey: invalid date string: ${dateStr}`);
+  }
+  const d = new Date(dateStr + 'T00:00:00Z');
+  const day = (d.getUTCDay() + 6) % 7; // 月=0
+  d.setUTCDate(d.getUTCDate() - day + 3); // その週の木曜
+  const year = d.getUTCFullYear();
+  const firstThursday = new Date(Date.UTC(year, 0, 4));
+  const firstDay = (firstThursday.getUTCDay() + 6) % 7;
+  firstThursday.setUTCDate(firstThursday.getUTCDate() - firstDay + 3);
+  const week = 1 + Math.round((d - firstThursday) / (7 * 24 * 3600 * 1000));
+  return `${year}-W${String(week).padStart(2, '0')}`;
+}
+
+/**
+ * 週キーの1つ前の週キーを返す。年またぎは weekKey に計算させる。
+ * weeklyVolume の系列は疎なので、消費側は「直前の要素＝先週」と決めつけず
+ * この関数で隣接を確かめてから「先週比」と表示すること。
+ */
+export function previousWeekKey(week) {
+  const [year, num] = String(week).split('-W').map(Number);
+  const jan4 = Date.UTC(year, 0, 4);
+  const monday = new Date(jan4);
+  monday.setUTCDate(monday.getUTCDate() - ((new Date(jan4).getUTCDay() + 6) % 7) + (num - 2) * 7);
+  return weekKey(monday.toISOString().slice(0, 10));
+}
+
+function sortedByDate(workouts) {
+  return [...workouts].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+}
+
+/**
+ * 曜日ではなく順送りで次のプログラムを決める。
+ * 直近の記録の program が未知（不正値・undefined）な場合は、既知の program を持つ
+ * 直近の記録まで遡って続きを決める。1件の壊れた記録のせいでローテーションが 'A' に
+ * リセットされ、胸の日（A）が2連続になったり脚の日（C）が飛ばされたりする事故を防ぐため。
+ */
+export function nextProgram(workouts) {
+  const sorted = sortedByDate(workouts).reverse();
+  for (const w of sorted) {
+    const index = PROGRAMS.indexOf(w.program);
+    if (index !== -1) return PROGRAMS[(index + 1) % PROGRAMS.length];
+  }
+  return 'A';
+}
+
+/**
+ * 総挙上量 = Σ(重量 × 回数)。補助重量（負値）と自重（0）は0として扱う。
+ * weight/reps が数値化できない値（undefined など）でも NaN を伝播させず0として扱う
+ * （防御的丸め）。NaN が混入すると reduce の結果・週合計・XP計算まで汚染され、
+ * さらに JSON.stringify(NaN) は null になるため localStorage に null として永続化され
+ * 以降の計算が恒久的に壊れる。
+ */
+export function calcVolume(sets) {
+  return sets.reduce((sum, s) => {
+    const w = Number(s.weight) || 0;
+    const r = Number(s.reps) || 0;
+    return sum + Math.max(0, w) * r;
+  }, 0);
+}
+
+/**
+ * 週ごとの総挙上量。週キーの昇順で返す。
+ * 返す配列は疎(sparse)である: トレーニングの無い週は要素自体が存在しないので、
+ * 呼び出し側は連続した週番号の並びだとみなしてはならない（間の週を0として補完したい
+ * 場合は呼び出し側で行うこと）。
+ * 日付が不正な記録（weekKey が例外を投げる形式）は、集計前に黙って除外する。
+ */
+export function weeklyVolume(workouts) {
+  const map = new Map();
+  for (const w of workouts) {
+    if (typeof w.date !== 'string' || !DATE_RE.test(w.date)) continue;
+    const key = weekKey(w.date);
+    const volume = w.volume ?? calcVolume(w.sets ?? []);
+    map.set(key, (map.get(key) ?? 0) + volume);
+  }
+  return [...map.entries()]
+    .sort((a, b) => (a[0] < b[0] ? -1 : 1))
+    .map(([week, volume]) => ({ week, volume }));
+}
+
+/** その種目の直近の重量・回数（同一セッション内では最後に記録したセット）。無ければ null */
+export function lastSetFor(workouts, exId) {
+  const sorted = sortedByDate(workouts).reverse();
+  for (const w of sorted) {
+    const hit = (w.sets ?? []).filter((s) => s.exId === exId).pop();
+    if (hit) return { weight: hit.weight, reps: hit.reps };
+  }
+  return null;
+}
+
+/** 重量優先、同重量なら回数で自己ベストを判定する */
+export function isPB(bests, exId, weight, reps) {
+  const best = bests[exId];
+  if (!best) return true;
+  if (weight > best.weight) return true;
+  if (weight === best.weight && reps > best.reps) return true;
+  return false;
+}
+
+/**
+ * PBのときだけ更新した新しい bests を返す（元は変更しない）。
+ * これは浅いコピー（shallow copy）である: 更新していない種目のエントリは入力の
+ * オブジェクトと参照を共有している。呼び出し側は `next[otherExId].reps++` のような
+ * 入れ子側の書き換えをしてはならない（元の bests を壊してしまう）。
+ */
+export function updateBests(bests, exId, weight, reps, date) {
+  if (!isPB(bests, exId, weight, reps)) return { ...bests };
+  return { ...bests, [exId]: { weight, reps, date } };
+}
+
+/** 脚の日（C）の翌日にバドミントンを入れようとしていれば true */
+export function warnsBadmintonAfterLegs(workouts, badmintonDate) {
+  const target = new Date(badmintonDate + 'T00:00:00Z');
+  const prev = new Date(target);
+  prev.setUTCDate(prev.getUTCDate() - 1);
+  const prevStr = prev.toISOString().slice(0, 10);
+  return workouts.some((w) => w.date === prevStr && w.program === 'C');
+}

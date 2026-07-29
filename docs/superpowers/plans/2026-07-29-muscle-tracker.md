@@ -44,6 +44,9 @@
 - Create: `package.json`
 - Create: `.gitignore`
 - Create: `test/helpers.js`
+- Test: `test/helpers.test.js`
+
+**前提:** このリポジトリには `git config user.name` / `user.email` がローカル設定済み。未設定ならコミットできないので先に確認する。
 
 - [ ] **Step 1: `package.json` を作る**
 
@@ -54,7 +57,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test test/"
+    "test": "node --test \"test/**/*.test.js\""
   }
 }
 ```
@@ -81,15 +84,49 @@ export function memoryStorage(initial = {}) {
 }
 ```
 
-- [ ] **Step 4: テストが動くことを確認**
+- [ ] **Step 4: `test/helpers.test.js` を作る**
+
+スタブも動作を保証すべきコードなので、テストを書く。
+
+**テスト実行コマンドの注意（検証済み）:** Node v24.15.0 (Windows) では `node --test test/` のように
+**ディレクトリを引数に渡すと中身に関係なく `MODULE_NOT_FOUND` で失敗する**。
+引数なしの `node --test` は動くが、テストではない `test/helpers.js` まで「0アサーションのテスト」として数えてしまう。
+そのため `package.json` ではグロブ形式 `node --test "test/**/*.test.js"` を使う（ダブルクォートは sh でのグロブ展開を防ぐため必須）。
+
+```js
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { memoryStorage } from './helpers.js';
+
+test('setItem した値を getItem で読める', () => {
+  const s = memoryStorage();
+  s.setItem('k', 'v');
+  assert.equal(s.getItem('k'), 'v');
+});
+
+test('未設定のキーは null を返す', () => {
+  assert.equal(memoryStorage().getItem('無い'), null);
+});
+
+test('初期値つきで作れて length が件数を返す', () => {
+  const s = memoryStorage({ a: '1', b: '2' });
+  assert.equal(s.length, 2);
+  assert.equal(s.getItem('a'), '1');
+  s.removeItem('a');
+  assert.equal(s.length, 1);
+  assert.equal(s.getItem('a'), null);
+});
+```
+
+- [ ] **Step 5: テストが通ることを確認**
 
 Run: `npm test`
-Expected: `# tests 0` と表示され、exit code 0（テストファイルがまだ無いので0件で成功）
+Expected: PASS（3件）、exit code 0
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add package.json .gitignore test/helpers.js
+git add package.json .gitignore test/helpers.js test/helpers.test.js
 git commit -m "chore: プロジェクト初期化とテスト環境"
 ```
 
@@ -102,6 +139,23 @@ git commit -m "chore: プロジェクト初期化とテスト環境"
 - Test: `test/store.test.js`
 
 `store.js` は「保存・読み込み・破損検証」だけを担当する。localStorage に触るのはこのファイルだけ。
+
+**設計上の要点（コードレビューで確定した事項）:**
+
+1. **永続化してからキャッシュを更新する。** 逆順だと `setItem` が QuotaExceededError で失敗しても
+   `get()` が「保存済み」と答えてしまい、ジムで記録した1セットが画面上は残ってリロードで消える。
+2. **`get`/`set` はスナップショット（clone）を扱う。** キャッシュの実体を返すと、呼び出し側が
+   `set` を忘れて mutate したときに「そのセッション中だけ存在してリロードで消える」幽霊データになる。
+3. **デフォルトのマージは再帰的に行う。** 浅いマージだと `profile.targets` や `game.xp` の
+   ネストした項目を補えず、`kcalFloor` が `undefined` になってカロリー下限警告が壊れる。
+4. **`get` と `set` は同じ `normalize()` を通す。** 通さないと、`set` 直後とリロード後で
+   `get` の結果が変わるという再現しづらいバグになる。
+5. **`importAll` は書き込み前に全キーを検証する。** 検証しないと `{"workouts":"garbage"}` を
+   そのまま書き込んで1年分の履歴を壊し、次回起動の `validate()` がそれを `[]` に「修復」して確定的に失う。
+   途中で `setItem` が失敗した場合は書き込み済みの分を元に戻す。
+6. **`exportAll` は Gemini APIキーを出力しない。** バックアップJSONは端末外（Drive・自分宛メール等）に
+   持ち出される可能性が最も高いファイルで、そこに認証情報を平文で載せない。
+   インポート時に空なら端末側の既存キーを維持する。
 
 - [ ] **Step 1: 失敗するテストを書く**
 
@@ -162,6 +216,176 @@ test('importAll は不正なJSONで例外を投げ、既存データを壊さな
   assert.throws(() => store.importAll('壊れた'), /インポート/);
   assert.equal(store.get('meals')[0].id, 'keep');
 });
+
+// --- 以下、コード品質レビューで指摘された観点の回帰テスト ---
+
+test('set は同じ storage を渡した別インスタンスからも読み戻せる(実際に永続化される)', () => {
+  const storage = memoryStorage();
+  const store1 = createStore(storage);
+  store1.set('workouts', [{ id: 'w1' }]);
+  const store2 = createStore(storage);
+  assert.equal(store2.get('workouts').length, 1);
+  assert.equal(store2.get('workouts')[0].id, 'w1');
+});
+
+test('set は storage の生JSONにも正しい形で書き込む', () => {
+  const storage = memoryStorage();
+  const store = createStore(storage);
+  store.set('workouts', [{ id: 'w1' }]);
+  assert.deepEqual(JSON.parse(storage.getItem('mt.workouts')), [{ id: 'w1' }]);
+});
+
+test('validate() の修復は storage 側にも反映される', () => {
+  const storage = memoryStorage({ 'mt.workouts': '{{{壊れたJSON' });
+  const store = createStore(storage);
+  store.validate();
+  assert.deepEqual(JSON.parse(storage.getItem('mt.workouts')), []);
+});
+
+test('read-modify-write パターンを別インスタンスを跨いで繰り返しても一貫した結果になる', () => {
+  const storage = memoryStorage();
+  const store1 = createStore(storage);
+  const w1 = store1.get('workouts');
+  w1.push({ id: 'w1' });
+  store1.set('workouts', w1);
+
+  const store2 = createStore(storage);
+  const w2 = store2.get('workouts');
+  w2.push({ id: 'w2' });
+  store2.set('workouts', w2);
+
+  const store3 = createStore(storage);
+  assert.equal(store3.get('workouts').length, 2);
+});
+
+test('get で返した値を mutate しても set しない限り保存されない(ゴーストデータ防止)', () => {
+  const storage = memoryStorage();
+  const store = createStore(storage);
+  const workouts = store.get('workouts');
+  workouts.push({ id: 'ghost' });
+  assert.equal(store.get('workouts').length, 0);
+  assert.equal(storage.getItem('mt.workouts'), null);
+});
+
+test('setItem が失敗した場合、キャッシュも更新されない', () => {
+  const storage = memoryStorage();
+  const realSetItem = storage.setItem.bind(storage);
+  let shouldFail = false;
+  storage.setItem = (k, v) => {
+    if (shouldFail) throw new Error('QuotaExceededError');
+    realSetItem(k, v);
+  };
+  const store = createStore(storage);
+  store.set('workouts', [{ id: 'w1' }]);
+  shouldFail = true;
+  assert.throws(() => store.set('workouts', [{ id: 'w1' }, { id: 'w2' }]));
+  assert.equal(store.get('workouts').length, 1);
+});
+
+test('部分的な profile を保存してもデフォルトのネスト項目が再帰的に補われる', () => {
+  const storage = memoryStorage({
+    'mt.profile': JSON.stringify({ targets: { protein: 120 } })
+  });
+  const store = createStore(storage);
+  const profile = store.get('profile');
+  assert.equal(profile.targets.protein, 120);
+  assert.equal(profile.targets.kcalFloor, 1500);
+  assert.equal(profile.height, 162);
+});
+
+test('importAll は不正な形式のキーを含む場合、何も書き込まずに例外を投げる', () => {
+  const storage = memoryStorage();
+  const store = createStore(storage);
+  store.set('meals', [{ id: 'keep' }]);
+  assert.throws(
+    () => store.importAll(JSON.stringify({ workouts: 'garbage', meals: [{ id: 'new' }] })),
+    /インポート/
+  );
+  assert.equal(store.get('meals')[0].id, 'keep');
+  assert.equal(store.get('workouts').length, 0);
+});
+
+test('importAll 途中で setItem が失敗したら書き込み済みの分も元に戻す', () => {
+  const storage = memoryStorage();
+  const store = createStore(storage);
+  store.set('workouts', [{ id: 'old-w' }]);
+  store.set('meals', [{ id: 'old-m' }]);
+
+  const realSetItem = storage.setItem.bind(storage);
+  let failOnMeals = false;
+  storage.setItem = (k, v) => {
+    if (failOnMeals && k === 'mt.meals') throw new Error('QuotaExceededError');
+    realSetItem(k, v);
+  };
+
+  failOnMeals = true;
+  assert.throws(() => store.importAll(JSON.stringify({
+    workouts: [{ id: 'new-w' }],
+    meals: [{ id: 'new-m' }]
+  })));
+  failOnMeals = false;
+
+  // カウンター経由(store.get)ではなく storage の生JSONを直接見て、
+  // キャッシュ側だけ元に戻っていて storage 側が壊れたまま、という事態を検知できるようにする。
+  assert.equal(JSON.parse(storage.getItem('mt.workouts'))[0].id, 'old-w');
+  assert.equal(JSON.parse(storage.getItem('mt.meals'))[0].id, 'old-m');
+  assert.equal(store.get('workouts')[0].id, 'old-w');
+  assert.equal(store.get('meals')[0].id, 'old-m');
+});
+
+test('get/set に未知のキーを渡すと例外になる', () => {
+  const store = createStore(memoryStorage());
+  assert.throws(() => store.get('unknown'), /未知のキー/);
+  assert.throws(() => store.set('unknown', {}), /未知のキー/);
+});
+
+test('exportAll は geminiKey を含めない', () => {
+  const store = createStore(memoryStorage());
+  store.set('settings', { geminiKey: 'secret-key', useOpenFoodFacts: true, photoReminder: true });
+  const json = JSON.parse(store.exportAll());
+  assert.equal(json.settings.geminiKey, '');
+});
+
+test('importAll で geminiKey が空なら端末側の既存キーを維持する', () => {
+  const store = createStore(memoryStorage());
+  store.set('settings', { geminiKey: 'existing-key', useOpenFoodFacts: true, photoReminder: true });
+  store.importAll(JSON.stringify({ settings: { geminiKey: '', useOpenFoodFacts: false, photoReminder: false } }));
+  assert.equal(store.get('settings').geminiKey, 'existing-key');
+  assert.equal(store.get('settings').useOpenFoodFacts, false);
+});
+
+// --- 再レビュー(N1〜N7)対応の回帰テスト ---
+
+test('set() は型が違う値を拒否し、storage を壊さない', () => {
+  const storage = memoryStorage();
+  const store = createStore(storage);
+  assert.throws(() => store.set('profile', 'garbage'), /不正な値/);
+  assert.throws(() => store.set('workouts', null), /不正な値/);
+  assert.throws(() => store.set('workouts', 42), /不正な値/);
+  assert.throws(() => store.set('profile', undefined), /不正な値/);
+  assert.equal(storage.getItem('mt.profile'), null);
+  assert.equal(storage.getItem('mt.workouts'), null);
+});
+
+test('set() は normalize を通す: 部分的な profile を渡してもデフォルトのネスト項目が補われる', () => {
+  const store = createStore(memoryStorage());
+  store.set('profile', { height: 170 });
+  assert.equal(store.get('profile').targets.kcalFloor, 1500);
+  assert.equal(store.get('profile').height, 170);
+});
+
+test('DEFAULTS は deep freeze されており、ネストしたプロパティの書き換えも例外になる', () => {
+  assert.throws(() => { DEFAULTS.profile.height = 1; });
+  assert.throws(() => { DEFAULTS.profile.targets.protein = 1; });
+  assert.throws(() => { DEFAULTS.workouts.push({}); });
+});
+
+test('validate() は mt. 以外のキーには一切触らない', () => {
+  const storage = memoryStorage({ 'other-app.settings': 'untouched-value' });
+  const store = createStore(storage);
+  store.validate();
+  assert.equal(storage.getItem('other-app.settings'), 'untouched-value');
+});
 ```
 
 - [ ] **Step 2: テストを実行して失敗を確認**
@@ -172,9 +396,29 @@ Expected: FAIL - `Cannot find module '../js/store.js'`
 - [ ] **Step 3: `js/store.js` を実装**
 
 ```js
+// このモジュールの契約(store.js を利用する全モジュールが前提としてよいこと):
+//
+// 1. get() が返す値は常にコピーである。呼び出し側がその場で mutate しても、
+//    set() を呼ばない限り永続化(localStorage)にもキャッシュにも反映されない。
+//    例: const w = store.get('workouts'); w.push(x); // ここではまだ何も保存されていない
+//        store.set('workouts', w);                    // この行で初めて保存される
+//
+// 2. 参照の同一性は保証されない。
+//    store.get('workouts')[0] !== store.get('workouts')[0] (呼ぶたびに新しいコピー)。
+//    そのため `===` によるオブジェクト比較や、エンティティそのものをキーにした
+//    Set/Map には依存しないこと。id などのプリミティブ値で同一性を判定すること。
+
 export const SCHEMA_VERSION = 1;
 
-export const DEFAULTS = {
+function deepFreeze(value) {
+  if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const v of Object.values(value)) deepFreeze(v);
+  }
+  return value;
+}
+
+export const DEFAULTS = deepFreeze({
   profile: {
     height: 162,
     startDate: null,
@@ -194,19 +438,46 @@ export const DEFAULTS = {
     badges: []
   },
   settings: { geminiKey: '', useOpenFoodFacts: true, photoReminder: true }
-};
+});
 
 const KEY_PREFIX = 'mt.';
 const isArrayKey = (key) => Array.isArray(DEFAULTS[key]);
+const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+// プレーンオブジェクトは再帰的にマージし、配列やプリミティブは丸ごと置き換える。
+// 保存済みデータに一部の項目しか無くても、後から DEFAULTS に増えたネストした項目を補える。
+function deepMerge(base, override) {
+  if (!isPlainObject(base) || !isPlainObject(override)) {
+    return override === undefined ? base : override;
+  }
+  const result = { ...base };
+  for (const key of Object.keys(override)) {
+    result[key] = isPlainObject(base[key]) && isPlainObject(override[key])
+      ? deepMerge(base[key], override[key])
+      : override[key];
+  }
+  return result;
+}
+
+function isValidFor(key, value) {
+  if (!(key in DEFAULTS)) return false;
+  return isArrayKey(key) ? Array.isArray(value) : isPlainObject(value);
+}
+
 export function createStore(storage = globalThis.localStorage) {
   const cache = new Map();
 
-  function readRaw(key) {
+  // get/set で同じ正規化を通す: 配列はそのまま(クローンのみ)、オブジェクトは DEFAULTS と再帰マージ。
+  function normalize(key, value) {
+    return isArrayKey(key) ? clone(value) : deepMerge(DEFAULTS[key], value);
+  }
+
+  // 保存済みJSONを読み、パース失敗・型不一致を破損として検出したうえで正規化まで行う。
+  function readValidated(key) {
     const raw = storage.getItem(KEY_PREFIX + key);
     if (raw === null) return { ok: true, value: clone(DEFAULTS[key]) };
     let parsed;
@@ -215,76 +486,136 @@ export function createStore(storage = globalThis.localStorage) {
     } catch {
       return { ok: false, value: clone(DEFAULTS[key]) };
     }
-    const typeOk = isArrayKey(key)
-      ? Array.isArray(parsed)
-      : parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed);
-    if (!typeOk) return { ok: false, value: clone(DEFAULTS[key]) };
-    return { ok: true, value: parsed };
+    if (!isValidFor(key, parsed)) return { ok: false, value: clone(DEFAULTS[key]) };
+    return { ok: true, value: normalize(key, parsed) };
   }
 
-  return {
-    get(key) {
-      if (!(key in DEFAULTS)) throw new Error(`未知のキー: ${key}`);
-      if (!cache.has(key)) {
-        const { value } = readRaw(key);
-        // オブジェクト系はデフォルトを土台にマージし、後から増えた項目を補う
-        cache.set(key, isArrayKey(key) ? value : { ...clone(DEFAULTS[key]), ...value });
-      }
-      return cache.get(key);
-    },
+  function get(key) {
+    if (!(key in DEFAULTS)) throw new Error(`未知のキー: ${key}`);
+    if (!cache.has(key)) {
+      const { value } = readValidated(key);
+      cache.set(key, clone(value));
+    }
+    // キャッシュの実体ではなくスナップショットを返す。呼び出し側が set せずに mutate しても
+    // キャッシュ/永続化には影響しない(= set し忘れによる「リロードで消えるゴーストデータ」を防ぐ)。
+    return clone(cache.get(key));
+  }
 
-    set(key, value) {
-      if (!(key in DEFAULTS)) throw new Error(`未知のキー: ${key}`);
-      cache.set(key, value);
-      storage.setItem(KEY_PREFIX + key, JSON.stringify(value));
-      return value;
-    },
+  function set(key, value) {
+    if (!(key in DEFAULTS)) throw new Error(`未知のキー: ${key}`);
+    if (!isValidFor(key, value)) {
+      const expected = isArrayKey(key) ? '配列' : 'オブジェクト';
+      throw new Error(`不正な値です(${key}): ${expected} を指定してください`);
+    }
+    const normalized = normalize(key, value);
+    // 先に永続化し、成功した場合のみキャッシュを更新する。
+    // setItem が QuotaExceededError 等で失敗した場合、キャッシュは古いままになり
+    // get() が「保存済み」と偽って答えることがない。
+    storage.setItem(KEY_PREFIX + key, JSON.stringify(normalized));
+    cache.set(key, clone(normalized));
+    return clone(normalized);
+  }
 
-    /** 全キーを検証し、壊れていたキーだけ初期化する。戻り値は修復したキー名の配列 */
-    validate() {
-      const repaired = [];
-      for (const key of Object.keys(DEFAULTS)) {
-        const { ok, value } = readRaw(key);
-        if (!ok) {
-          repaired.push(key);
-          cache.set(key, value);
-          storage.setItem(KEY_PREFIX + key, JSON.stringify(value));
-        }
-      }
-      storage.setItem(KEY_PREFIX + 'schemaVersion', String(SCHEMA_VERSION));
-      return repaired;
-    },
-
-    exportAll() {
-      const out = { schemaVersion: SCHEMA_VERSION };
-      for (const key of Object.keys(DEFAULTS)) out[key] = this.get(key);
-      return JSON.stringify(out, null, 2);
-    },
-
-    importAll(json) {
-      let data;
-      try {
-        data = JSON.parse(json);
-      } catch {
-        throw new Error('インポートに失敗しました: JSONとして読めません');
-      }
-      if (data === null || typeof data !== 'object') {
-        throw new Error('インポートに失敗しました: 形式が不正です');
-      }
-      for (const key of Object.keys(DEFAULTS)) {
-        if (key in data) this.set(key, data[key]);
+  function validate() {
+    const repaired = [];
+    for (const key of Object.keys(DEFAULTS)) {
+      const { ok, value } = readValidated(key);
+      if (!ok) {
+        repaired.push(key);
+        storage.setItem(KEY_PREFIX + key, JSON.stringify(value));
+        cache.set(key, clone(value));
       }
     }
-  };
+    storage.setItem(KEY_PREFIX + 'schemaVersion', String(SCHEMA_VERSION));
+    return repaired;
+  }
+
+  function exportAll() {
+    const out = { schemaVersion: SCHEMA_VERSION };
+    for (const key of Object.keys(DEFAULTS)) out[key] = get(key);
+    // Gemini APIキーはバックアップ(端末外に持ち出される可能性が高いファイル)には含めない。
+    if (out.settings) out.settings = { ...out.settings, geminiKey: '' };
+    return JSON.stringify(out, null, 2);
+  }
+
+  function importAll(json) {
+    let data;
+    try {
+      data = JSON.parse(json);
+    } catch {
+      throw new Error('インポートに失敗しました: JSONとして読めません');
+    }
+    if (!isPlainObject(data)) {
+      throw new Error('インポートに失敗しました: 形式が不正です');
+    }
+
+    const targetKeys = Object.keys(DEFAULTS).filter((key) => key in data);
+
+    // 書き込み前に全キーの形式を検証する。1つでも不正なら何も書き込まずに例外を投げる。
+    for (const key of targetKeys) {
+      if (!isValidFor(key, data[key])) {
+        throw new Error(`インポートに失敗しました: ${key} の形式が不正です`);
+      }
+    }
+
+    // Gemini APIキーが空でインポートされた場合は、端末に既にある値を維持する
+    // (同じ端末へ復元する際にキーを入れ直さずに済むように)。
+    if (targetKeys.includes('settings') && !data.settings.geminiKey) {
+      data.settings = { ...data.settings, geminiKey: get('settings').geminiKey };
+    }
+
+    const previousRaw = new Map();
+    for (const key of targetKeys) previousRaw.set(key, storage.getItem(KEY_PREFIX + key));
+
+    const applied = [];
+    try {
+      for (const key of targetKeys) {
+        set(key, data[key]);
+        applied.push(key);
+      }
+    } catch (err) {
+      // 途中で setItem が失敗した場合、書き込み済みだった分を元の値に戻してから再スローする。
+      // ロールバック自体の setItem/removeItem も(容量逼迫時などに)失敗しうるため、
+      // 1件ずつ try/catch で囲んで残りの復元を続行し、元の例外(原因)を消さずに再スローする。
+      const failedRollbacks = [];
+      for (const key of applied) {
+        try {
+          const prev = previousRaw.get(key);
+          if (prev === null) storage.removeItem(KEY_PREFIX + key);
+          else storage.setItem(KEY_PREFIX + key, prev);
+          cache.delete(key);
+        } catch {
+          failedRollbacks.push(key);
+        }
+      }
+      if (failedRollbacks.length > 0) {
+        err.message += ` (ロールバックにも失敗したキー: ${failedRollbacks.join(', ')})`;
+      }
+      throw err;
+    }
+  }
+
+  return { get, set, validate, exportAll, importAll };
 }
 ```
 
 - [ ] **Step 4: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（6件）
+Expected: PASS（累計25件）
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: 永続化が本当にテストされているか確認する（ミューテーションテスト）**
+
+永続化層のテストは、キャッシュ経由でしか読み戻していないと「永続化していなくても通る」状態になりやすい。
+一時的に `set()` 内の `storage.setItem(...)` の行を無効化して `npm test` を実行し、
+**テストが失敗すること**を確認してから元に戻す。
+
+Expected: 5件が fail する（0件しか落ちないなら、テストがキャッシュしか見ていない）
+
+同様に次の変異でもテストが落ちることを確認する。いずれも1件ずつ落ちる:
+`set()` の `normalize` 呼び出し除去 / `set()` の型検証除去 / `deepMerge` を浅いマージに変更 / `DEFAULTS` の `deepFreeze` 除去
+
+- [ ] **Step 6: Commit**
 
 ```bash
 git add js/store.js test/store.test.js
@@ -372,7 +703,7 @@ Expected: FAIL - `ENOENT ... data/exercises.json`
 - [ ] **Step 4: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（Task 2 の6件＋今回の3件＝9件）
+Expected: PASS（累計28件）
 
 - [ ] **Step 5: Commit**
 
@@ -391,12 +722,21 @@ git commit -m "feat: JOYFIT室蘭のマシン定義とプログラムA/B/Cを追
 
 - [ ] **Step 1: 失敗するテストを書く**
 
-`test/workout.test.js`:
+`test/workout.test.js`（Task 5 で追加するPB系のテストも含めた最終形）:
 
 ```js
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { nextProgram, calcVolume, weeklyVolume, lastSetsFor } from '../js/workout.js';
+import {
+  nextProgram,
+  calcVolume,
+  weeklyVolume,
+  lastSetFor,
+  isPB,
+  updateBests,
+  warnsBadmintonAfterLegs,
+  weekKey
+} from '../js/workout.js';
 
 test('記録が無ければ最初はA', () => {
   assert.equal(nextProgram([]), 'A');
@@ -414,6 +754,14 @@ test('日付が最新の記録を基準にする（配列順に依存しない�
     { date: '2026-07-20', program: 'C' }
   ];
   assert.equal(nextProgram(workouts), 'C');
+});
+
+test('未知のprogramの記録は無視して直近の既知programから継続する', () => {
+  const workouts = [
+    { date: '2026-07-27', program: 'A' },
+    { date: '2026-07-29', program: undefined }
+  ];
+  assert.equal(nextProgram(workouts), 'B');
 });
 
 test('総挙上量は 重量×回数 の合計', () => {
@@ -434,6 +782,14 @@ test('自重（0kg）は回数×体重換算せず0として扱う', () => {
   assert.equal(calcVolume([{ exId: 'ab_coaster', weight: 0, reps: 15 }]), 0);
 });
 
+test('calcVolume は不正な値を0として扱いNaNを伝播させない', () => {
+  const sets = [
+    { exId: 'lat_pulldown', weight: 35, reps: 10 },
+    { exId: 'lat_pulldown', weight: undefined, reps: 8 }
+  ];
+  assert.equal(calcVolume(sets), 350);
+});
+
 test('週次の総挙上量を月曜始まりで集計する', () => {
   const workouts = [
     { date: '2026-07-27', program: 'A', volume: 1000 }, // 月
@@ -446,13 +802,127 @@ test('週次の総挙上量を月曜始まりで集計する', () => {
   assert.equal(weeks[1].volume, 900);
 });
 
-test('前回のセットを種目ごとに引ける', () => {
+test('weeklyVolume は volume が無い記録を sets から計算して集計する', () => {
+  const workouts = [
+    { date: '2026-07-27', program: 'A', sets: [{ exId: 'seated_row', weight: 30, reps: 10 }] }
+  ];
+  const weeks = weeklyVolume(workouts);
+  assert.equal(weeks.length, 1);
+  assert.equal(weeks[0].volume, 300);
+});
+
+test('weeklyVolume は日付が不正な記録を例外を投げずに除外する', () => {
+  const workouts = [
+    { date: '2026-07-27', program: 'A', volume: 1000 },
+    { date: undefined, program: 'B', volume: 99999 }
+  ];
+  const weeks = weeklyVolume(workouts);
+  assert.equal(weeks.length, 1);
+  assert.equal(weeks[0].volume, 1000);
+});
+
+test('weekKey は月曜始まりのISO週番号を返す', () => {
+  assert.equal(weekKey('2025-12-29'), '2026-W01');
+  assert.equal(weekKey('2026-07-29'), '2026-W31');
+  assert.equal(weekKey('2026-12-31'), '2026-W53');
+  assert.equal(weekKey('2027-01-01'), '2026-W53');
+  assert.equal(weekKey('2027-01-04'), '2027-W01');
+});
+
+test('weekKey は不正な形式の日付で例外を投げる', () => {
+  assert.throws(() => weekKey(undefined));
+  assert.throws(() => weekKey('2026-7-9')); // ゼロ埋めなし
+});
+
+test('前回のセットを種目ごとに引ける（同一セッション内では最後のセットを返す）', () => {
   const workouts = [
     { date: '2026-07-20', program: 'B', sets: [{ exId: 'seated_row', weight: 30, reps: 10 }] },
-    { date: '2026-07-27', program: 'B', sets: [{ exId: 'seated_row', weight: 32.5, reps: 12 }] }
+    {
+      date: '2026-07-27',
+      program: 'B',
+      sets: [
+        { exId: 'seated_row', weight: 32.5, reps: 12 },
+        { exId: 'seated_row', weight: 32.5, reps: 10 },
+        { exId: 'seated_row', weight: 35, reps: 8 }
+      ]
+    }
   ];
-  assert.deepEqual(lastSetsFor(workouts, 'seated_row'), { weight: 32.5, reps: 12 });
-  assert.equal(lastSetsFor(workouts, 'leg_press'), null);
+  assert.deepEqual(lastSetFor(workouts, 'seated_row'), { weight: 35, reps: 8 });
+  assert.equal(lastSetFor(workouts, 'leg_press'), null);
+});
+
+test('記録が無ければ最初のセットはPB', () => {
+  assert.equal(isPB({}, 'seated_row', 30, 10), true);
+});
+
+test('重量が上回ればPB', () => {
+  const bests = { seated_row: { weight: 30, reps: 10, date: '2026-07-20' } };
+  assert.equal(isPB(bests, 'seated_row', 32.5, 8), true);
+});
+
+test('同じ重量で回数が上回ればPB', () => {
+  const bests = { seated_row: { weight: 30, reps: 10, date: '2026-07-20' } };
+  assert.equal(isPB(bests, 'seated_row', 30, 11), true);
+});
+
+test('同じ重量で回数が同じならPBではない', () => {
+  const bests = { seated_row: { weight: 30, reps: 10, date: '2026-07-20' } };
+  assert.equal(isPB(bests, 'seated_row', 30, 10), false);
+});
+
+test('重量が下がれば回数が多くてもPBではない', () => {
+  const bests = { seated_row: { weight: 30, reps: 10, date: '2026-07-20' } };
+  assert.equal(isPB(bests, 'seated_row', 27.5, 20), false);
+});
+
+test('updateBests は元のオブジェクトを壊さない', () => {
+  const bests = { seated_row: { weight: 30, reps: 10, date: '2026-07-20' } };
+  const next = updateBests(bests, 'seated_row', 32.5, 8, '2026-07-29');
+  assert.equal(bests.seated_row.weight, 30);
+  assert.equal(next.seated_row.weight, 32.5);
+  assert.equal(next.seated_row.date, '2026-07-29');
+});
+
+test('PBでなければ updateBests は同じ内容を返す', () => {
+  const bests = { seated_row: { weight: 30, reps: 10, date: '2026-07-20' } };
+  const next = updateBests(bests, 'seated_row', 27.5, 8, '2026-07-29');
+  assert.deepEqual(next.seated_row, bests.seated_row);
+  assert.notEqual(next, bests); // 内容は同じでも新しいオブジェクトを返す
+});
+
+test('updateBests は他種目のPBを保持する', () => {
+  const bests = {
+    seated_row: { weight: 30, reps: 10, date: '2026-07-20' },
+    lat_pulldown: { weight: 40, reps: 8, date: '2026-07-15' }
+  };
+  const next = updateBests(bests, 'seated_row', 32.5, 8, '2026-07-29');
+  assert.deepEqual(next.lat_pulldown, bests.lat_pulldown);
+  assert.deepEqual(next.seated_row, { weight: 32.5, reps: 8, date: '2026-07-29' });
+});
+
+test('脚の日（C）の翌日にバドミントンを入れると警告する', () => {
+  const workouts = [{ date: '2026-07-29', program: 'C' }];
+  assert.equal(warnsBadmintonAfterLegs(workouts, '2026-07-30'), true);
+});
+
+test('脚の日の2日後なら警告しない', () => {
+  const workouts = [{ date: '2026-07-29', program: 'C' }];
+  assert.equal(warnsBadmintonAfterLegs(workouts, '2026-07-31'), false);
+});
+
+test('AやBの翌日は警告しない', () => {
+  const workouts = [{ date: '2026-07-29', program: 'A' }];
+  assert.equal(warnsBadmintonAfterLegs(workouts, '2026-07-30'), false);
+});
+
+test('月をまたぐ脚の日の翌日も警告する', () => {
+  const workouts = [{ date: '2026-07-31', program: 'C' }];
+  assert.equal(warnsBadmintonAfterLegs(workouts, '2026-08-01'), true);
+});
+
+test('年をまたぐ脚の日の翌日も警告する', () => {
+  const workouts = [{ date: '2026-12-31', program: 'C' }];
+  assert.equal(warnsBadmintonAfterLegs(workouts, '2027-01-01'), true);
 });
 ```
 
@@ -466,8 +936,24 @@ Expected: FAIL - `Cannot find module '../js/workout.js'`
 ```js
 export const PROGRAMS = ['A', 'B', 'C'];
 
-/** 日付文字列 'YYYY-MM-DD' の週キー（月曜始まり）を返す。例: '2026-W31' */
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * 日付文字列 'YYYY-MM-DD' の週キー（月曜始まり、ISO 8601週番号）を返す。例: '2026-W31'
+ *
+ * 不正な形式の入力（undefined・ゼロ埋め無しなど）は例外を投げる。これはプログラマの
+ * ミスを黙って通さないための設計判断: 以前は不正入力で 'NaN-WNaN' のような無意味な
+ * キーを返しており、文字列比較では 'N' > '2' のため週次集計の並びの最後（＝「最新週」
+ * として画面に出る位置）に紛れ込んでしまっていた。
+ *
+ * 一方 weeklyVolume() はこの関数と非対称に、不正な日付を持つ記録を例外を投げずに
+ * 除外する。weeklyVolume はインポートされた記録など信頼できない外部データが入りうる
+ * 境界であり、1件の壊れた記録のせいで週次集計全体が例外で落ちるのは避けたいため。
+ */
 export function weekKey(dateStr) {
+  if (typeof dateStr !== 'string' || !DATE_RE.test(dateStr)) {
+    throw new Error(`weekKey: invalid date string: ${dateStr}`);
+  }
   const d = new Date(dateStr + 'T00:00:00Z');
   const day = (d.getUTCDay() + 6) % 7; // 月=0
   d.setUTCDate(d.getUTCDate() - day + 3); // その週の木曜
@@ -483,25 +969,47 @@ function sortedByDate(workouts) {
   return [...workouts].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
 }
 
-/** 曜日ではなく順送りで次のプログラムを決める */
+/**
+ * 曜日ではなく順送りで次のプログラムを決める。
+ * 直近の記録の program が未知（不正値・undefined）な場合は、既知の program を持つ
+ * 直近の記録まで遡って続きを決める。1件の壊れた記録のせいでローテーションが 'A' に
+ * リセットされ、胸の日（A）が2連続になったり脚の日（C）が飛ばされたりする事故を防ぐため。
+ */
 export function nextProgram(workouts) {
-  const sorted = sortedByDate(workouts);
-  const last = sorted[sorted.length - 1];
-  if (!last) return 'A';
-  const index = PROGRAMS.indexOf(last.program);
-  if (index === -1) return 'A';
-  return PROGRAMS[(index + 1) % PROGRAMS.length];
+  const sorted = sortedByDate(workouts).reverse();
+  for (const w of sorted) {
+    const index = PROGRAMS.indexOf(w.program);
+    if (index !== -1) return PROGRAMS[(index + 1) % PROGRAMS.length];
+  }
+  return 'A';
 }
 
-/** 総挙上量 = Σ(重量 × 回数)。補助重量（負値）と自重（0）は0として扱う */
+/**
+ * 総挙上量 = Σ(重量 × 回数)。補助重量（負値）と自重（0）は0として扱う。
+ * weight/reps が数値化できない値（undefined など）でも NaN を伝播させず0として扱う
+ * （防御的丸め）。NaN が混入すると reduce の結果・週合計・XP計算まで汚染され、
+ * さらに JSON.stringify(NaN) は null になるため localStorage に null として永続化され
+ * 以降の計算が恒久的に壊れる。
+ */
 export function calcVolume(sets) {
-  return sets.reduce((sum, s) => sum + Math.max(0, s.weight) * s.reps, 0);
+  return sets.reduce((sum, s) => {
+    const w = Number(s.weight) || 0;
+    const r = Number(s.reps) || 0;
+    return sum + Math.max(0, w) * r;
+  }, 0);
 }
 
-/** 週ごとの総挙上量。週キーの昇順で返す */
+/**
+ * 週ごとの総挙上量。週キーの昇順で返す。
+ * 返す配列は疎(sparse)である: トレーニングの無い週は要素自体が存在しないので、
+ * 呼び出し側は連続した週番号の並びだとみなしてはならない（間の週を0として補完したい
+ * 場合は呼び出し側で行うこと）。
+ * 日付が不正な記録（weekKey が例外を投げる形式）は、集計前に黙って除外する。
+ */
 export function weeklyVolume(workouts) {
   const map = new Map();
   for (const w of workouts) {
+    if (typeof w.date !== 'string' || !DATE_RE.test(w.date)) continue;
     const key = weekKey(w.date);
     const volume = w.volume ?? calcVolume(w.sets ?? []);
     map.set(key, (map.get(key) ?? 0) + volume);
@@ -511,8 +1019,8 @@ export function weeklyVolume(workouts) {
     .map(([week, volume]) => ({ week, volume }));
 }
 
-/** その種目の直近の重量・回数。無ければ null */
-export function lastSetsFor(workouts, exId) {
+/** その種目の直近の重量・回数（同一セッション内では最後に記録したセット）。無ければ null */
+export function lastSetFor(workouts, exId) {
   const sorted = sortedByDate(workouts).reverse();
   for (const w of sorted) {
     const hit = (w.sets ?? []).filter((s) => s.exId === exId).pop();
@@ -525,7 +1033,7 @@ export function lastSetsFor(workouts, exId) {
 - [ ] **Step 4: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（累計17件）
+Expected: PASS（累計36件）
 
 - [ ] **Step 5: Commit**
 
@@ -620,7 +1128,12 @@ export function isPB(bests, exId, weight, reps) {
   return false;
 }
 
-/** PBのときだけ更新した新しい bests を返す（元は変更しない） */
+/**
+ * PBのときだけ更新した新しい bests を返す（元は変更しない）。
+ * これは浅いコピー（shallow copy）である: 更新していない種目のエントリは入力の
+ * オブジェクトと参照を共有している。呼び出し側は `next[otherExId].reps++` のような
+ * 入れ子側の書き換えをしてはならない（元の bests を壊してしまう）。
+ */
 export function updateBests(bests, exId, weight, reps, date) {
   if (!isPB(bests, exId, weight, reps)) return { ...bests };
   return { ...bests, [exId]: { weight, reps, date } };
@@ -639,7 +1152,7 @@ export function warnsBadmintonAfterLegs(workouts, badmintonDate) {
 - [ ] **Step 4: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（累計27件）
+Expected: PASS（累計55件）
 
 - [ ] **Step 5: Commit**
 
@@ -740,6 +1253,32 @@ test('bumpFoodUse は使用回数を1増やした新しい配列を返す', () =
   assert.equal(foods[0].useCount, 3);
   assert.equal(next[0].useCount, 4);
 });
+
+test('まだ何も記録していない日(kcal:0)は「食べなさすぎ」警告を出さない', () => {
+  const t = dayTotals([], '2026-07-29');
+  assert.deepEqual(t, { kcal: 0, protein: 0, alcoholMl: 0 });
+  const a = achievement(t, TARGETS);
+  assert.ok(!a.warnings.some((w) => w.type === 'kcalFloor'));
+});
+
+test('dayTotals は壊れたmealレコードを例外を投げずに読み飛ばす', () => {
+  const meals = [
+    { id: 'ok', datetime: '2026-07-29T19:00', items: [{ kcal: 100, protein: 10 }] },
+    { id: 'no-datetime', items: [{ kcal: 999, protein: 99 }] },
+    { id: 'null-datetime', datetime: null, items: [{ kcal: 999, protein: 99 }] },
+    null,
+    { id: 'items-not-array', datetime: '2026-07-29T20:00', items: 'garbage' }
+  ];
+  assert.deepEqual(dayTotals(meals, '2026-07-29'), { kcal: 100, protein: 10, alcoholMl: 0 });
+});
+
+test('targetsの分母が0または非有限なら達成率は0%として扱う（Infinity/NaNを出さない）', () => {
+  const a1 = achievement({ kcal: 1750, protein: 100, alcoholMl: 0 }, { ...TARGETS, protein: 0 });
+  assert.equal(a1.proteinPct, 0);
+
+  const a2 = achievement({ kcal: 1750, protein: 100, alcoholMl: 0 }, { ...TARGETS, kcalMin: 0 });
+  assert.equal(a2.kcalPct, 0);
+});
 ```
 
 - [ ] **Step 2: テストを実行して失敗を確認**
@@ -750,15 +1289,31 @@ Expected: FAIL - `Cannot find module '../js/nutrition.js'`
 - [ ] **Step 3: `js/nutrition.js` を実装**
 
 ```js
-/** その日の kcal / タンパク質 / アルコール量を合計する */
+/** 数値化できない値は0として扱い、NaN/文字列連結の伝播を防ぐ */
+function toNum(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/**
+ * その日の kcal / タンパク質 / アルコール量を合計する。
+ *
+ * meals は OCR 経路や store.importAll(配列かどうかしか検証しない)から入る
+ * 信頼できない境界のデータなので、壊れたレコード1件で集計全体が落ちないよう
+ * 例外を投げず読み飛ばす。js/workout.js の weeklyVolume が不正な日付の記録を
+ * 除外して継続するのと同じ設計判断。
+ */
 export function dayTotals(meals, dateStr) {
   const totals = { kcal: 0, protein: 0, alcoholMl: 0 };
   for (const meal of meals) {
+    if (!meal || typeof meal.datetime !== 'string') continue;
     if (!meal.datetime.startsWith(dateStr)) continue;
-    for (const item of meal.items ?? []) {
-      totals.kcal += item.kcal ?? 0;
-      totals.protein += item.protein ?? 0;
-      totals.alcoholMl += item.alcoholMl ?? 0;
+    if (!Array.isArray(meal.items)) continue;
+    for (const item of meal.items) {
+      if (!item) continue;
+      totals.kcal += toNum(item.kcal);
+      totals.protein += toNum(item.protein);
+      totals.alcoholMl += toNum(item.alcoholMl);
     }
   }
   return totals;
@@ -767,36 +1322,56 @@ export function dayTotals(meals, dateStr) {
 /**
  * 達成率と警告を返す。
  * 設計方針: 上限超過より「下限割れ」を重く扱う。摂取を削るほど目的から遠ざかるため。
+ * kcal:0(まだ何も記録していない日)は「食べなさすぎ」danger警告の対象にしない。
+ * 朝いちばんの空腹状態を毎回 danger 扱いすると、この警告自体が無視される
+ * ようになり、1,000kcal台への逆戻りを止めるという本来の目的を果たせなくなる。
+ *
+ * totals は dayTotals を経由しない呼び出しにも備え、dayTotals と同じ toNum で
+ * 防御的に丸める(achievement は単体でもエクスポートされているため)。
+ * targets の分母(protein / kcalMin)が0または非有限の場合、割り算が
+ * Infinity/NaN になり JSON.stringify で null に化ける(store.js で潰したのと
+ * 同じ失敗モード)。ここではバーが伸びないだけで済むよう達成率を0%として扱う。
  */
 export function achievement(totals, targets) {
+  const kcal = toNum(totals?.kcal);
+  const protein = toNum(totals?.protein);
+  const alcoholMl = toNum(totals?.alcoholMl);
+
   const warnings = [];
 
-  if (totals.kcal > 0 && totals.kcal < targets.kcalFloor) {
+  if (kcal > 0 && kcal < targets.kcalFloor) {
     warnings.push({
       type: 'kcalFloor',
       level: 'danger',
-      message: `${Math.round(totals.kcal)}kcal は少なすぎます。この水準が続くと筋肉が分解されて目的と逆方向に進みます`
+      message: `${Math.round(kcal)}kcal は少なすぎます。この水準が続くと筋肉が分解されて目的と逆方向に進みます`
     });
-  } else if (totals.kcal > targets.kcalMax) {
+  } else if (kcal > targets.kcalMax) {
     warnings.push({
       type: 'kcalOver',
       level: 'info',
-      message: `目標を${Math.round(totals.kcal - targets.kcalMax)}kcal超えています`
+      message: `目標を${Math.round(kcal - targets.kcalMax)}kcal超えています`
     });
   }
 
-  if (totals.protein > 0 && totals.protein < targets.protein) {
+  if (protein > 0 && protein < targets.protein) {
     warnings.push({
       type: 'proteinShort',
       level: 'warn',
-      message: `タンパク質があと${Math.round(targets.protein - totals.protein)}g足りません`
+      message: `タンパク質があと${Math.round(targets.protein - protein)}g足りません`
     });
   }
 
+  const proteinTarget = targets.protein;
+  const kcalMinTarget = targets.kcalMin;
+
   return {
-    proteinPct: Math.round((totals.protein / targets.protein) * 100),
-    kcalPct: Math.round((totals.kcal / targets.kcalMax) * 100),
-    alcoholOver: totals.alcoholMl > targets.alcoholMl,
+    proteinPct: Number.isFinite(proteinTarget) && proteinTarget > 0
+      ? Math.round((protein / proteinTarget) * 100)
+      : 0,
+    kcalPct: Number.isFinite(kcalMinTarget) && kcalMinTarget > 0
+      ? Math.min(100, Math.round((kcal / kcalMinTarget) * 100))
+      : 0,
+    alcoholOver: alcoholMl > targets.alcoholMl,
     warnings
   };
 }
@@ -834,7 +1409,7 @@ export function bumpFoodUse(foods, foodId) {
 - [ ] **Step 5: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（累計37件）
+Expected: PASS（累計68件）
 
 - [ ] **Step 6: Commit**
 
@@ -853,12 +1428,14 @@ git commit -m "feat: 食事集計と死守2項目の判定を追加"
 
 - [ ] **Step 1: 失敗するテストを書く**
 
-`test/game.test.js`:
+`test/game.test.js`（Task 8・9 の追記分まで含む最終形）:
 
 ```js
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PARTS, levelFromXp, addWorkoutXp, radarData } from '../js/game.js';
+import { calcStreak, isInitialPhase, initialPhaseStatus } from '../js/game.js';
+import { BADGES, checkBadges } from '../js/game.js';
 
 const EXERCISES = [
   { id: 'lat_pulldown', part: 'back' },
@@ -914,6 +1491,217 @@ test('レーダー用データは6部位すべてのレベルを返す', () => {
   assert.equal(data.find((d) => d.part === 'back').level, 3);
   assert.equal(data.find((d) => d.part === 'chest').label, '胸');
 });
+
+test('xpMap に無い部位もレベル0で必ず含める（弱点部位が消えない）', () => {
+  const data = radarData({ back: 400 });
+  assert.equal(data.length, 6);
+  assert.deepEqual(data.map((d) => d.part), ['chest', 'back', 'shoulder', 'leg', 'arm', 'abs']);
+  assert.equal(data.find((d) => d.part === 'leg').level, 0);
+  assert.equal(data.find((d) => d.part === 'leg').xp, 0);
+});
+
+function gymWeek(mondayDate, count) {
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    const d = new Date(mondayDate + 'T00:00:00Z');
+    d.setUTCDate(d.getUTCDate() + i * 2);
+    out.push({ date: d.toISOString().slice(0, 10), program: 'A' });
+  }
+  return out;
+}
+
+test('週3回達成した週が連続していればストリークが伸びる', () => {
+  const workouts = [
+    ...gymWeek('2026-07-13', 3),
+    ...gymWeek('2026-07-20', 3),
+    ...gymWeek('2026-07-27', 3)
+  ];
+  assert.equal(calcStreak(workouts, '2026-07-29'), 3);
+});
+
+test('週2回しかできなかった週でストリークが切れる', () => {
+  const workouts = [
+    ...gymWeek('2026-07-13', 3),
+    ...gymWeek('2026-07-20', 2),
+    ...gymWeek('2026-07-27', 3)
+  ];
+  assert.equal(calcStreak(workouts, '2026-07-29'), 1);
+});
+
+test('進行中の週はまだ3回に達していなくてもストリークを切らない', () => {
+  const workouts = [
+    ...gymWeek('2026-07-20', 3),
+    ...gymWeek('2026-07-27', 1) // 今週はまだ1回
+  ];
+  assert.equal(calcStreak(workouts, '2026-07-29'), 1);
+});
+
+test('記録が無ければ0', () => {
+  assert.equal(calcStreak([], '2026-07-29'), 0);
+});
+
+test('開始から28日未満は初期モード', () => {
+  assert.equal(isInitialPhase('2026-07-01', '2026-07-28'), true);
+  assert.equal(isInitialPhase('2026-07-01', '2026-07-29'), false);
+});
+
+test('初期モードでは週3ジムと朝プロテインの2つだけを評価する', () => {
+  const workouts = gymWeek('2026-07-27', 3);
+  const meals = [
+    { datetime: '2026-07-27T07:00', items: [{ name: 'プロテイン 1杯', kcal: 120, protein: 24 }] },
+    { datetime: '2026-07-28T07:30', items: [{ name: 'プロテイン 1杯', kcal: 120, protein: 24 }] }
+  ];
+  const s = initialPhaseStatus(workouts, meals, '2026-07-29');
+  assert.equal(s.gymCount, 3);
+  assert.equal(s.gymDone, true);
+  assert.equal(s.proteinMornings, 2);
+  assert.deepEqual(Object.keys(s).sort(), ['gymCount', 'gymDone', 'proteinMornings']);
+});
+
+test('朝プロテインは11時までの摂取だけを数える', () => {
+  const meals = [
+    { datetime: '2026-07-27T07:00', items: [{ name: 'プロテイン 1杯', kcal: 120, protein: 24 }] },
+    { datetime: '2026-07-28T15:00', items: [{ name: 'プロテイン 1杯', kcal: 120, protein: 24 }] }
+  ];
+  assert.equal(initialPhaseStatus([], meals, '2026-07-29').proteinMornings, 1);
+});
+
+test('同じ朝に2杯飲んでも1日として数える', () => {
+  const meals = [
+    { datetime: '2026-07-27T07:00', items: [{ name: 'プロテイン 1杯', kcal: 120, protein: 24 }] },
+    { datetime: '2026-07-27T09:00', items: [{ name: 'プロテイン 1杯', kcal: 120, protein: 24 }] }
+  ];
+  assert.equal(initialPhaseStatus([], meals, '2026-07-29').proteinMornings, 1);
+});
+
+test('先週の朝プロテインは今週に数えない', () => {
+  const meals = [
+    { datetime: '2026-07-20T07:00', items: [{ name: 'プロテイン 1杯', kcal: 120, protein: 24 }] },
+    { datetime: '2026-07-27T07:00', items: [{ name: 'プロテイン 1杯', kcal: 120, protein: 24 }] }
+  ];
+  assert.equal(initialPhaseStatus([], meals, '2026-07-29').proteinMornings, 1);
+});
+
+test('先週のジムの記録は今週のgymCountに混ざらない', () => {
+  const workouts = [...gymWeek('2026-07-20', 3), ...gymWeek('2026-07-27', 1)];
+  assert.equal(initialPhaseStatus(workouts, [], '2026-07-29').gymCount, 1);
+});
+
+test('称号は id・name・説明を持つ', () => {
+  for (const b of BADGES) {
+    assert.ok(b.id && b.name && b.desc);
+  }
+});
+
+test('初回トレーニングで「初心者ボーナス期」を獲得する', () => {
+  const earned = checkBadges({
+    workouts: [{ date: '2026-07-29', program: 'A', volume: 1000 }],
+    body: [], streak: 0, xp: { chest: 0, back: 0, shoulder: 0, leg: 0, arm: 0, abs: 0 },
+    comparedPhotos: false, badges: []
+  });
+  assert.ok(earned.includes('first_workout'));
+});
+
+test('すでに持っている称号は再度返さない', () => {
+  const earned = checkBadges({
+    workouts: [{ date: '2026-07-29', program: 'A', volume: 1000 }],
+    body: [], streak: 0, xp: { chest: 0, back: 0, shoulder: 0, leg: 0, arm: 0, abs: 0 },
+    comparedPhotos: false, badges: ['first_workout']
+  });
+  assert.ok(!earned.includes('first_workout'));
+});
+
+test('4週連続で「習慣化」を獲得する', () => {
+  const earned = checkBadges({
+    workouts: [], body: [], streak: 4,
+    xp: { chest: 0, back: 0, shoulder: 0, leg: 0, arm: 0, abs: 0 },
+    comparedPhotos: false, badges: []
+  });
+  assert.ok(earned.includes('habit_4w'));
+});
+
+test('体脂肪率が3%下がると「腹筋上部が割れた」を獲得する', () => {
+  const earned = checkBadges({
+    workouts: [], streak: 0,
+    body: [
+      { date: '2026-04-29', weight: 60, muscle: 45, fatPct: 20 },
+      { date: '2026-07-29', weight: 60, muscle: 47, fatPct: 17 }
+    ],
+    xp: { chest: 0, back: 0, shoulder: 0, leg: 0, arm: 0, abs: 0 },
+    comparedPhotos: false, badges: []
+  });
+  assert.ok(earned.includes('abs_visible'));
+});
+
+test('比較ビューを開くと「定点観測」を獲得する', () => {
+  const earned = checkBadges({
+    workouts: [], body: [], streak: 0,
+    xp: { chest: 0, back: 0, shoulder: 0, leg: 0, arm: 0, abs: 0 },
+    comparedPhotos: true, badges: []
+  });
+  assert.ok(earned.includes('photo_compare'));
+});
+
+test('3週連続では「習慣化」を獲得しない', () => {
+  const base = { workouts: [], body: [], xp: { chest: 0, back: 0, shoulder: 0, leg: 0, arm: 0, abs: 0 }, comparedPhotos: false, badges: [] };
+  assert.ok(!checkBadges({ ...base, streak: 3 }).includes('habit_4w'));
+  assert.ok(checkBadges({ ...base, streak: 4 }).includes('habit_4w'));
+});
+
+test('総挙上量10トン未満では「10トン挙げた」を獲得しない', () => {
+  const base = { body: [], streak: 0, xp: { chest: 0, back: 0, shoulder: 0, leg: 0, arm: 0, abs: 0 }, comparedPhotos: false, badges: [] };
+  const under = [{ date: '2026-07-29', program: 'A', volume: 9999 }];
+  const over = [{ date: '2026-07-29', program: 'A', volume: 10000 }];
+  assert.ok(!checkBadges({ ...base, workouts: under }).includes('volume_10t'));
+  assert.ok(checkBadges({ ...base, workouts: over }).includes('volume_10t'));
+});
+
+test('body の配列順が逆でも開始時と最新で比較する', () => {
+  const earned = checkBadges({
+    workouts: [], streak: 0,
+    body: [
+      { date: '2026-07-29', weight: 60, muscle: 47, fatPct: 17 },
+      { date: '2026-04-29', weight: 60, muscle: 45, fatPct: 20 }
+    ],
+    xp: { chest: 0, back: 0, shoulder: 0, leg: 0, arm: 0, abs: 0 },
+    comparedPhotos: false, badges: []
+  });
+  assert.ok(earned.includes('abs_visible'));
+  assert.ok(earned.includes('muscle_plus2'));
+});
+
+test('胸と肩の両方がレベル3以上で「肩と胸に丸みが出た」を獲得する（片方だけでは獲得しない）', () => {
+  const base = { workouts: [], body: [], streak: 0, comparedPhotos: false, badges: [] };
+  const bothLv3 = checkBadges({ ...base, xp: { chest: 900, back: 0, shoulder: 900, leg: 0, arm: 0, abs: 0 } });
+  assert.ok(bothLv3.includes('shoulder_lv3'));
+
+  const onlyChest = checkBadges({ ...base, xp: { chest: 900, back: 0, shoulder: 0, leg: 0, arm: 0, abs: 0 } });
+  assert.ok(!onlyChest.includes('shoulder_lv3'));
+
+  const onlyShoulder = checkBadges({ ...base, xp: { chest: 0, back: 0, shoulder: 900, leg: 0, arm: 0, abs: 0 } });
+  assert.ok(!onlyShoulder.includes('shoulder_lv3'));
+});
+
+test('筋肉量+2.0kgで「中身が変わった」を獲得する（+1.9kgでは獲得しない）', () => {
+  const base = { workouts: [], streak: 0, xp: { chest: 0, back: 0, shoulder: 0, leg: 0, arm: 0, abs: 0 }, comparedPhotos: false, badges: [] };
+  const under = checkBadges({
+    ...base,
+    body: [
+      { date: '2026-04-29', weight: 60, muscle: 45, fatPct: 20 },
+      { date: '2026-07-29', weight: 60, muscle: 46.9, fatPct: 20 }
+    ]
+  });
+  assert.ok(!under.includes('muscle_plus2'));
+
+  const over = checkBadges({
+    ...base,
+    body: [
+      { date: '2026-04-29', weight: 60, muscle: 45, fatPct: 20 },
+      { date: '2026-07-29', weight: 60, muscle: 47, fatPct: 20 }
+    ]
+  });
+  assert.ok(over.includes('muscle_plus2'));
+});
 ```
 
 - [ ] **Step 2: テストを実行して失敗を確認**
@@ -924,7 +1712,7 @@ Expected: FAIL - `Cannot find module '../js/game.js'`
 - [ ] **Step 3: `js/game.js` を実装**
 
 ```js
-import { calcVolume } from './workout.js';
+import { calcVolume, weekKey } from './workout.js';
 
 export const PARTS = ['chest', 'back', 'shoulder', 'leg', 'arm', 'abs'];
 
@@ -932,19 +1720,37 @@ export const PART_LABELS = {
   chest: '胸', back: '背中', shoulder: '肩', leg: '脚', arm: '腕', abs: '腹'
 };
 
-/** レベルは固定式。バランス調整に時間を溶かさないため意図的に単純化している */
-export function levelFromXp(xp) {
-  return Math.floor(Math.sqrt(xp / 100));
+/**
+ * 数値化できない値・負値は0として扱う（js/nutrition.js の toNum と同じ防御的丸め）。
+ * XPは加算を繰り返しながら永続化されるため、1回だけ紛れ込んだ NaN や不正な型の値を
+ * そのまま伝播させると、以降の加算・レベル計算が恒久的に壊れる
+ * （JSON.stringify(NaN) は null になり localStorage 上でも消えない）。
+ */
+function toNum(v) {
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? n : 0;
 }
 
-/** 部位XPに1回分のトレーニングを加算した新しいオブジェクトを返す */
+/** レベルは固定式。バランス調整に時間を溶かさないため意図的に単純化している */
+export function levelFromXp(xp) {
+  return Math.floor(Math.sqrt(toNum(xp) / 100));
+}
+
+/**
+ * 部位XPに1回分のトレーニングを加算した新しいオブジェクトを返す。
+ * 加算前の既存値も toNum で防御的に丸める: xpMap に既に NaN や文字列が
+ * 紛れ込んでいた場合、`(next[part] ?? 0)` のような null/undefined のみを
+ * 見るガードだと NaN はそのまま伝播し、文字列は `+` で連結されてしまう
+ * （例: 'oops' + 35 === 'oops35'）。ここで0に丸めることで、過去に紛れ込んだ
+ * 壊れた値からも次回の加算で回復できるようにしている。
+ */
 export function addWorkoutXp(xpMap, workout, exercises) {
   const partOf = new Map(exercises.map((e) => [e.id, e.part]));
   const next = { ...xpMap };
   for (const set of workout.sets ?? []) {
     const part = partOf.get(set.exId);
     if (!part || !PARTS.includes(part)) continue;
-    next[part] = (next[part] ?? 0) + calcVolume([set]) / 10;
+    next[part] = toNum(next[part]) + calcVolume([set]) / 10;
   }
   return next;
 }
@@ -954,8 +1760,8 @@ export function radarData(xpMap) {
   return PARTS.map((part) => ({
     part,
     label: PART_LABELS[part],
-    xp: xpMap[part] ?? 0,
-    level: levelFromXp(xpMap[part] ?? 0)
+    xp: toNum(xpMap?.[part]),
+    level: levelFromXp(xpMap?.[part])
   }));
 }
 ```
@@ -963,7 +1769,7 @@ export function radarData(xpMap) {
 - [ ] **Step 4: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（累計43件）
+Expected: PASS（累計75件）
 
 - [ ] **Step 5: Commit**
 
@@ -1086,6 +1892,7 @@ function shiftWeeks(dateStr, delta) {
 export function calcStreak(workouts, todayStr) {
   const counts = new Map();
   for (const w of workouts) {
+    if (typeof w.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(w.date)) continue;
     const key = weekKey(w.date);
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }
@@ -1122,15 +1929,20 @@ export function isInitialPhase(startDate, todayStr) {
  */
 export function initialPhaseStatus(workouts, meals, todayStr) {
   const thisWeek = weekKey(todayStr);
-  const gymCount = workouts.filter((w) => weekKey(w.date) === thisWeek).length;
+  const gymCount = (workouts ?? []).filter((w) => {
+    if (typeof w.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(w.date)) return false;
+    return weekKey(w.date) === thisWeek;
+  }).length;
 
   const proteinMornings = new Set();
-  for (const meal of meals) {
+  for (const meal of meals ?? []) {
+    if (typeof meal?.datetime !== 'string') continue;
     const [date, time = ''] = meal.datetime.split('T');
+    if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
     if (weekKey(date) !== thisWeek) continue;
     const hour = Number(time.slice(0, 2));
     if (Number.isNaN(hour) || hour >= 11) continue;
-    const hasProtein = (meal.items ?? []).some((i) => i.name.includes('プロテイン'));
+    const hasProtein = (meal.items ?? []).some((i) => typeof i?.name === 'string' && i.name.includes('プロテイン'));
     if (hasProtein) proteinMornings.add(date);
   }
 
@@ -1141,7 +1953,7 @@ export function initialPhaseStatus(workouts, meals, todayStr) {
 - [ ] **Step 4: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（累計50件）
+Expected: PASS（累計85件）
 
 - [ ] **Step 5: Commit**
 
@@ -1241,9 +2053,22 @@ export const BADGES = [
 /**
  * 未獲得のうち、条件を満たした称号IDを返す。
  * state: { workouts, body, streak, xp, comparedPhotos, badges }
+ *
+ * body / workouts は storage / importAll を経由して届く未検証データのため
+ * （このファイルの他の集計関数と同じ方針で）不正なレコードは無視し、例外は投げない。
+ * fatPct・muscle・volume は toNum で防御的に丸める: NaN や欠損値のまま差分を
+ * 取ると `NaN >= 3` は常に false になるため実害は薄いが、文字列が紛れ込むと
+ * `'20' - '17'` のように意図せず動く/動かないケースがあり、丸めて統一しておく方が安全。
+ * body の日付は文字列比較でソートするため、不正な形式の日付が混ざると並び順が
+ * 保証できない。ここでは date が YYYY-MM-DD 形式のレコードだけを対象にする。
+ * badges は game オブジェクト内のネストしたフィールドであり、store.js の
+ * deepMerge は配列型のトップレベルキー(workouts/body等)しか配列性を検証しない
+ * ため、ネストした badges が不正なJSON編集等で配列以外(文字列・数値等)に
+ * 壊れていてもそのまま届き得る。Array.isArray で確認し、そうでなければ
+ * 「何も所持していない」として扱う（Set(非配列) は例外を投げるため）。
  */
 export function checkBadges(state) {
-  const owned = new Set(state.badges ?? []);
+  const owned = new Set(Array.isArray(state.badges) ? state.badges : []);
   const earned = [];
   const add = (id, condition) => {
     if (condition && !owned.has(id)) earned.push(id);
@@ -1254,15 +2079,17 @@ export function checkBadges(state) {
   add('shoulder_lv3', levelFromXp(state.xp?.chest ?? 0) >= 3 && levelFromXp(state.xp?.shoulder ?? 0) >= 3);
   add('photo_compare', state.comparedPhotos === true);
 
-  const body = [...(state.body ?? [])].sort((a, b) => (a.date < b.date ? -1 : 1));
+  const body = (state.body ?? [])
+    .filter((b) => typeof b?.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(b.date))
+    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
   if (body.length >= 2) {
     const first = body[0];
     const last = body[body.length - 1];
-    add('abs_visible', first.fatPct - last.fatPct >= 3);
-    add('muscle_plus2', last.muscle - first.muscle >= 2);
+    add('abs_visible', toNum(first.fatPct) - toNum(last.fatPct) >= 3);
+    add('muscle_plus2', toNum(last.muscle) - toNum(first.muscle) >= 2);
   }
 
-  const totalVolume = (state.workouts ?? []).reduce((sum, w) => sum + (w.volume ?? 0), 0);
+  const totalVolume = (state.workouts ?? []).reduce((sum, w) => sum + toNum(w?.volume), 0);
   add('volume_10t', totalVolume >= 10000);
 
   return earned;
@@ -1272,7 +2099,7 @@ export function checkBadges(state) {
 - [ ] **Step 4: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（累計56件）
+Expected: PASS（累計96件）
 
 - [ ] **Step 5: Commit**
 
@@ -1336,6 +2163,11 @@ test('グラフ用に日付昇順の3系列を返す', () => {
   assert.deepEqual(s.muscle, [45.0, 45.8, 47.0]);
   assert.deepEqual(s.fatPct, [20.0, 18.5, 17.0]);
 });
+
+test('基準日より後の記録が無ければ差分は0（例外にしない）', () => {
+  assert.deepEqual(bodyDiff(BODY, '2026-12-01'), { weight: 0, muscle: 0, fatPct: 0 });
+  assert.deepEqual(bodyDiff([]), { weight: 0, muscle: 0, fatPct: 0 });
+});
 ```
 
 - [ ] **Step 2: テストを実行して失敗を確認**
@@ -1346,8 +2178,26 @@ Expected: FAIL - `Cannot find module '../js/body.js'`
 - [ ] **Step 3: `js/body.js` を実装**
 
 ```js
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** 数値化できない値は0として扱い、NaN/文字列連結の伝播を防ぐ（js/nutrition.js, js/game.js の toNum と同じ） */
+function toNum(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/**
+ * body は storage / store.importAll(配列かどうかしか検証しない) を経由して届く
+ * 未検証データの境界であり、壊れたレコード1件で計算全体を落とさないよう例外を
+ * 投げず読み飛ばす（js/nutrition.js の dayTotals, js/workout.js の weeklyVolume,
+ * js/game.js の checkBadges と同じ設計判断）。null要素と、date が文字列で
+ * YYYY-MM-DD 形式でないレコードを除外する: 後続のソートは日付を文字列比較する
+ * ため、date が undefined 等だと比較が常に false になり並び順が保証できない。
+ */
 function sorted(body) {
-  return [...body].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  return (body ?? [])
+    .filter((b) => b && typeof b.date === 'string' && DATE_RE.test(b.date))
+    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
 }
 
 export function latestBody(body) {
@@ -1362,9 +2212,9 @@ export function bodyDiff(body, since = null) {
   const first = s[0];
   const last = s[s.length - 1];
   return {
-    weight: last.weight - first.weight,
-    muscle: last.muscle - first.muscle,
-    fatPct: last.fatPct - first.fatPct
+    weight: toNum(last.weight) - toNum(first.weight),
+    muscle: toNum(last.muscle) - toNum(first.muscle),
+    fatPct: toNum(last.fatPct) - toNum(first.fatPct)
   };
 }
 
@@ -1373,9 +2223,9 @@ export function bodySeries(body) {
   const s = sorted(body);
   return {
     labels: s.map((b) => b.date),
-    weight: s.map((b) => b.weight),
-    muscle: s.map((b) => b.muscle),
-    fatPct: s.map((b) => b.fatPct)
+    weight: s.map((b) => toNum(b.weight)),
+    muscle: s.map((b) => toNum(b.muscle)),
+    fatPct: s.map((b) => toNum(b.fatPct))
   };
 }
 ```
@@ -1383,7 +2233,7 @@ export function bodySeries(body) {
 - [ ] **Step 4: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（累計62件）
+Expected: PASS（累計103件）
 
 - [ ] **Step 5: Commit**
 
@@ -1595,6 +2445,14 @@ export function nowStr() {
   const off = d.getTimezoneOffset() * 60000;
   return new Date(d - off).toISOString().slice(0, 16);
 }
+
+/** 衝突しないID。crypto.randomUUID が使えない環境ではカウンタで補う */
+let idCounter = 0;
+export function newId(prefix) {
+  if (globalThis.crypto?.randomUUID) return `${prefix}_${crypto.randomUUID()}`;
+  idCounter += 1;
+  return `${prefix}_${Date.now()}_${idCounter}`;
+}
 ```
 
 - [ ] **Step 4: `js/main.js` で起動処理を書く**
@@ -1659,7 +2517,7 @@ git commit -m "feat: HTMLシェル・スタイル・タブ切替を追加"
 - [ ] **Step 1: `js/mealTab.js` を作る**
 
 ```js
-import { $, onShow, toast, todayStr, nowStr } from './ui.js';
+import { $, onShow, toast, todayStr, nowStr, newId } from './ui.js';
 import { dayTotals, achievement, sortFoodsByUse, bumpFoodUse } from './nutrition.js';
 
 let store;
@@ -1687,9 +2545,11 @@ export function renderStatusBar() {
   setBar('#proteinFill', '#proteinValue', a.proteinPct,
     `${Math.round(totals.protein)} / ${targets.protein}g`,
     totals.protein >= targets.protein ? 'done' : '');
+  // 達成率は下限(kcalMin)基準・100%頭打ち。表示も範囲で出す。
+  // 「/1800」だと1800が目標に見え、このユーザーが最も避けたい「もっと減らそう」方向に効く
   setBar('#kcalFill', '#kcalValue', a.kcalPct,
-    `${Math.round(totals.kcal)} / ${targets.kcalMax}`,
-    totals.kcal > targets.kcalMax ? 'over' : '');
+    `${Math.round(totals.kcal)} / ${targets.kcalMin}〜${targets.kcalMax}`,
+    totals.kcal > targets.kcalMax ? 'over' : (totals.kcal >= targets.kcalMin ? 'done' : ''));
   setBar('#alcoholFill', '#alcoholValue',
     (totals.alcoholMl / targets.alcoholMl) * 100,
     `${totals.alcoholMl} / ${targets.alcoholMl}ml`,
@@ -1704,15 +2564,19 @@ export function renderStatusBar() {
 export function addFoodById(foodId) {
   const food = store.get('foods').find((f) => f.id === foodId);
   if (!food) return;
-  addItems([{ name: food.name, kcal: food.kcal, protein: food.protein, alcoholMl: food.alcoholMl ?? 0 }], 'tap');
+  // useCount は addItems（=再描画を含む）より先に更新する。
+  // 先に addItems を呼んでしまうと、押した食品が上位に来るのが次の描画まで
+  // 遅れてしまい、「よく食べるものが1タップで届く位置に来る」という
+  // このタブの存在意義そのものが体感で1回遅れて壊れる。
   store.set('foods', bumpFoodUse(store.get('foods'), foodId));
+  addItems([{ name: food.name, kcal: food.kcal, protein: food.protein, alcoholMl: food.alcoholMl ?? 0 }], 'tap');
   toast(`${food.name} を追加`);
 }
 
 /** 任意の品目群を1回の食事として記録する */
 export function addItems(items, source) {
   const meals = store.get('meals');
-  meals.push({ id: `m${Date.now()}`, datetime: nowStr(), items, source });
+  meals.push({ id: newId('m'), datetime: nowStr(), items, source });
   store.set('meals', meals);
   renderStatusBar();
   renderMealTab();
@@ -1813,11 +2677,19 @@ git commit -m "feat: 食事タブとワンタップ登録を追加"
 - Create: `js/workoutTab.js`
 - Modify: `js/main.js`
 
+**注意1:** レコードIDに `Date.now()` を使わないこと。同一ミリ秒で衝突し、削除時に別レコードまで巻き添えで消える。
+`js/ui.js` の `newId(prefix)`（`crypto.randomUUID` ベース）を使う。
+
+**注意2:** ✓の完了状態を DOM に持たせないこと。`renderExercise` は毎回 `session.sets` から
+`doneCount` を導出して描画する。DOM に持たせると、セッション中にタブを移動して戻ったときに
+完了表示が消え、同じセットを二重記録できてしまう（ジムではセット間のタブ移動は普通に起きる）。
+表示する重量・回数も、今回のセッションで記録済みならその最後の値を優先する。
+
 - [ ] **Step 1: `js/workoutTab.js` を作る**
 
 ```js
-import { $, onShow, toast, vibrate, todayStr } from './ui.js';
-import { nextProgram, calcVolume, lastSetsFor, isPB, updateBests } from './workout.js';
+import { $, onShow, toast, vibrate, todayStr, newId } from './ui.js';
+import { nextProgram, calcVolume, lastSetFor, isPB, updateBests } from './workout.js';
 import { addWorkoutXp, checkBadges, BADGES, calcStreak } from './game.js';
 
 const PROGRAM_NAMES = { A: '胸・肩・三頭', B: '背中・二頭', C: '脚・腹' };
@@ -1861,9 +2733,17 @@ export function renderWorkoutTab() {
 }
 
 function renderExercise(ex, workouts, bests) {
-  const last = lastSetsFor(workouts, ex.id);
-  const weight = last?.weight ?? ex.defaultWeight;
-  const reps = last?.reps ?? ex.defaultReps;
+  const last = lastSetFor(workouts, ex.id);
+  // 今回のセッションで既に記録済みのセット（タブ移動しても .done を DOM ではなく
+  // session.sets から導出するための元データ）。
+  const mySets = session.sets.filter((s) => s.exId === ex.id);
+  const doneCount = mySets.length;
+  const latestThisSession = mySets[mySets.length - 1];
+  // 今回既に1セットでも記録していれば、表示する重量・回数は前回セッションの値ではなく
+  // 「今回実際に記録した最後の値」にする。そうしないとタブ往復のたびに前回値へ巻き戻り、
+  // 次のセットが意図と違う重量で記録されてしまう。
+  const weight = latestThisSession?.weight ?? last?.weight ?? ex.defaultWeight;
+  const reps = latestThisSession?.reps ?? last?.reps ?? ex.defaultReps;
   const best = bests[ex.id];
   const hint = best ? `⚡ ${best.weight}kg×${best.reps}を超えると自己ベスト` : '';
 
@@ -1883,7 +2763,7 @@ function renderExercise(ex, workouts, bests) {
         <button data-act="r+">＋</button>
       </div>
       <div class="ex-ctrl">
-        ${Array.from({ length: ex.sets }, (_, i) => `<button class="setbtn" data-act="set" data-index="${i}">✓</button>`).join('')}
+        ${Array.from({ length: ex.sets }, (_, i) => `<button class="setbtn${i < doneCount ? ' done' : ''}" data-act="set" data-index="${i}">✓</button>`).join('')}
       </div>
     </div>`;
 }
@@ -1956,7 +2836,7 @@ function finishSession() {
   const workouts = store.get('workouts');
   const volume = calcVolume(session.sets);
   workouts.push({
-    id: `w${Date.now()}`,
+    id: newId('w'),
     date: session.date,
     program: session.program,
     sets: session.sets,
@@ -2458,17 +3338,47 @@ export async function lookupJan(jan, foods, useOpenFoodFacts) {
     if (!res.ok) return null;
     const data = await res.json();
     if (data.status !== 1 || !data.product) return null;
+
+    // 1食分の数値が両方揃っている場合だけ「1個」として扱う。
+    // 揃っていない場合に100gあたりの数値を1個分として保存すると、
+    // カロリー(死守2項目の一方)が静かにずれるため、その場合は
+    // 100gあたりの数値と分かるよう unit と名前の両方に明記する。
     const n = data.product.nutriments ?? {};
-    const kcal = n['energy-kcal_serving'] ?? n['energy-kcal_100g'];
-    const protein = n.proteins_serving ?? n.proteins_100g;
-    if (kcal === undefined || protein === undefined) return null;
+    const kcalServing = n['energy-kcal_serving'];
+    const proteinServing = n.proteins_serving;
+    const kcal100 = n['energy-kcal_100g'];
+    const protein100 = n.proteins_100g;
+
+    let kcal, protein, unit;
+    if (kcalServing !== undefined && proteinServing !== undefined) {
+      kcal = kcalServing;
+      protein = proteinServing;
+      unit = '個';
+    } else if (kcal100 !== undefined && protein100 !== undefined) {
+      kcal = kcal100;
+      protein = protein100;
+      unit = '100g';
+    } else {
+      return null;
+    }
+
+    // OFF に品名が無い商品を「商品 <JAN>」のまま登録すると、ワンタップ一覧に
+    // 判読できないボタンが並んでしまい、このタブの存在意義(よく食べるものが
+    // 1タップで届く)を損なう。栄養値はOFFのものをそのまま使い、名前だけその場で尋ねる。
+    let name = data.product.product_name_ja || data.product.product_name || '';
+    if (!name) {
+      name = prompt(`品名を取得できませんでした（JAN: ${jan}）\n品名を入力してください`);
+      if (!name) return null;
+    }
+    if (unit === '100g') name = `${name}（100gあたり）`;
+
     return {
       source: 'openfoodfacts',
       food: {
         id: `jan_${jan}`,
         jan,
-        name: data.product.product_name_ja || data.product.product_name || `商品 ${jan}`,
-        unit: '個',
+        name,
+        unit,
         kcal: Math.round(kcal),
         protein: Math.round(protein * 10) / 10,
         useCount: 0
@@ -2578,7 +3488,11 @@ git commit -m "feat: バーコード読み取りとOpen Food Facts照会を追�
 - Create: `js/ocr.js`
 - Modify: `js/mealTab.js`
 
-**重要:** `ocr.js` に渡してよいのは食事写真とレシートのみ。体の写真は `photos.js` の管轄で、このモジュールを経由しない。
+**重要1:** `ocr.js` に渡してよいのは食事写真とレシートのみ。体の写真は `photos.js` の管轄で、このモジュールを経由しない。
+
+**重要2:** 外部API由来の文字列（品名など）を `innerHTML` に埋めるときは必ず `js/ui.js` の `esc()` を通すこと。
+このアプリは localStorage に体重・体組成・食事・トレ記録を保持し、同一オリジンで `fetch` も使えるため、
+スクリプトが実行されると読み出しと外部送信まで到達しうる。
 
 - [ ] **Step 1: `js/ocr.js` を作る**
 
@@ -2946,12 +3860,24 @@ function fmt(n) {
   return (n >= 0 ? '+' : '') + n.toFixed(1);
 }
 
+// weeklyVolume の系列は疎（トレーニングが無い週は要素が無い）。
+// 直前の要素が本当に「先週」とは限らないので、週キーが隣接している時だけ先週比を出す。
 function weekSummary(weeks) {
   if (weeks.length < 2) return '2週分たまると先週比が出ます';
-  const last = weeks[weeks.length - 1].volume;
-  const prev = weeks[weeks.length - 2].volume;
-  const diff = Math.round(last - prev);
+  const last = weeks[weeks.length - 1];
+  const prev = weeks[weeks.length - 2];
+  if (prev.week !== previousWeekKey(last.week)) return `前回トレした週(${prev.week})から再開`;
+  const diff = Math.round(last.volume - prev.volume);
   return `先週比 ${diff >= 0 ? '+' : ''}${diff}kg`;
+}
+
+/** 週キーの1つ前の週キーを返す。年またぎは weekKey に計算させる */
+function previousWeekKey(week) {
+  const [year, num] = week.split('-W').map(Number);
+  const jan4 = Date.UTC(year, 0, 4);
+  const monday = new Date(jan4);
+  monday.setUTCDate(monday.getUTCDate() - ((new Date(jan4).getUTCDay() + 6) % 7) + (num - 2) * 7);
+  return weekKey(monday.toISOString().slice(0, 10));
 }
 
 /** 直近8週間のカレンダー。💪ジム 🏸バド 😴休養 */
@@ -3088,9 +4014,13 @@ function thisWeekVolume(weeks, today) {
   return Math.round(weeks.find((w) => w.week === key)?.volume ?? 0);
 }
 
+// 疎な系列なので、週キーが隣接していない場合は「先週比」と呼ばない
 function weekDiff(weeks) {
   if (weeks.length < 2) return '';
-  const diff = Math.round(weeks[weeks.length - 1].volume - weeks[weeks.length - 2].volume);
+  const last = weeks[weeks.length - 1];
+  const prev = weeks[weeks.length - 2];
+  if (prev.week !== previousWeekKey(last.week)) return '';
+  const diff = Math.round(last.volume - prev.volume);
   return diff >= 0 ? `<span class="up">先週比 +${diff}kg ↗</span>` : `先週比 ${diff}kg`;
 }
 
@@ -3107,6 +4037,8 @@ function recordBadminton() {
   renderHomeTab();
 }
 
+// 3項目そろっていない記録は保存しない。body.js は欠損値を0扱いするため、
+// 1項目だけ欠けると差分が実際の値と大きくずれる（例: weight欠損で開始比 +59.8kg）
 function recordBody() {
   const weight = Number(prompt('体重(kg)', '60'));
   const muscle = Number(prompt('筋肉量(kg)', '45'));
@@ -3635,7 +4567,17 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm test
+
   deploy:
+    needs: test
     runs-on: ubuntu-latest
     environment:
       name: github-pages
@@ -3681,7 +4623,7 @@ python -m http.server 8080    # ローカル確認
 - [ ] **Step 3: 全テストを流して確認**
 
 Run: `npm test`
-Expected: PASS（累計62件）、失敗0件
+Expected: PASS（103件）、失敗0件
 
 - [ ] **Step 4: Commit**
 

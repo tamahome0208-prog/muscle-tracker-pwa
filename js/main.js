@@ -1,6 +1,7 @@
 import { createStore } from './store.js';
 import { initTabs, todayStr } from './ui.js';
 import { initMealTab } from './mealTab.js';
+import { initWorkoutTab } from './workoutTab.js';
 
 export const store = createStore();
 
@@ -24,6 +25,7 @@ async function boot() {
   }
   await loadSeed();
   initMealTab(store);
+  initWorkoutTab(store);
   initTabs();
 
   if ('serviceWorker' in navigator) {

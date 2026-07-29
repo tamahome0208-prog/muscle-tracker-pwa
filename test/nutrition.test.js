@@ -76,3 +76,29 @@ test('bumpFoodUse は使用回数を1増やした新しい配列を返す', () =
   assert.equal(foods[0].useCount, 3);
   assert.equal(next[0].useCount, 4);
 });
+
+test('まだ何も記録していない日(kcal:0)は「食べなさすぎ」警告を出さない', () => {
+  const t = dayTotals([], '2026-07-29');
+  assert.deepEqual(t, { kcal: 0, protein: 0, alcoholMl: 0 });
+  const a = achievement(t, TARGETS);
+  assert.ok(!a.warnings.some((w) => w.type === 'kcalFloor'));
+});
+
+test('dayTotals は壊れたmealレコードを例外を投げずに読み飛ばす', () => {
+  const meals = [
+    { id: 'ok', datetime: '2026-07-29T19:00', items: [{ kcal: 100, protein: 10 }] },
+    { id: 'no-datetime', items: [{ kcal: 999, protein: 99 }] },
+    { id: 'null-datetime', datetime: null, items: [{ kcal: 999, protein: 99 }] },
+    null,
+    { id: 'items-not-array', datetime: '2026-07-29T20:00', items: 'garbage' }
+  ];
+  assert.deepEqual(dayTotals(meals, '2026-07-29'), { kcal: 100, protein: 10, alcoholMl: 0 });
+});
+
+test('targetsの分母が0または非有限なら達成率は0%として扱う（Infinity/NaNを出さない）', () => {
+  const a1 = achievement({ kcal: 1750, protein: 100, alcoholMl: 0 }, { ...TARGETS, protein: 0 });
+  assert.equal(a1.proteinPct, 0);
+
+  const a2 = achievement({ kcal: 1750, protein: 100, alcoholMl: 0 }, { ...TARGETS, kcalMin: 0 });
+  assert.equal(a2.kcalPct, 0);
+});

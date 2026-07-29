@@ -40,3 +40,8 @@ test('グラフ用に日付昇順の3系列を返す', () => {
   assert.deepEqual(s.muscle, [45.0, 45.8, 47.0]);
   assert.deepEqual(s.fatPct, [20.0, 18.5, 17.0]);
 });
+
+test('基準日より後の記録が無ければ差分は0（例外にしない）', () => {
+  assert.deepEqual(bodyDiff(BODY, '2026-12-01'), { weight: 0, muscle: 0, fatPct: 0 });
+  assert.deepEqual(bodyDiff([]), { weight: 0, muscle: 0, fatPct: 0 });
+});

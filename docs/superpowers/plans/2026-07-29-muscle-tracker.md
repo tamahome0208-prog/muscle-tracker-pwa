@@ -722,12 +722,21 @@ git commit -m "feat: JOYFIT室蘭のマシン定義とプログラムA/B/Cを追
 
 - [ ] **Step 1: 失敗するテストを書く**
 
-`test/workout.test.js`:
+`test/workout.test.js`（Task 5 で追加するPB系のテストも含めた最終形）:
 
 ```js
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { nextProgram, calcVolume, weeklyVolume, lastSetsFor } from '../js/workout.js';
+import {
+  nextProgram,
+  calcVolume,
+  weeklyVolume,
+  lastSetFor,
+  isPB,
+  updateBests,
+  warnsBadmintonAfterLegs,
+  weekKey
+} from '../js/workout.js';
 
 test('記録が無ければ最初はA', () => {
   assert.equal(nextProgram([]), 'A');
@@ -745,6 +754,14 @@ test('日付が最新の記録を基準にする（配列順に依存しない�
     { date: '2026-07-20', program: 'C' }
   ];
   assert.equal(nextProgram(workouts), 'C');
+});
+
+test('未知のprogramの記録は無視して直近の既知programから継続する', () => {
+  const workouts = [
+    { date: '2026-07-27', program: 'A' },
+    { date: '2026-07-29', program: undefined }
+  ];
+  assert.equal(nextProgram(workouts), 'B');
 });
 
 test('総挙上量は 重量×回数 の合計', () => {
@@ -765,6 +782,14 @@ test('自重（0kg）は回数×体重換算せず0として扱う', () => {
   assert.equal(calcVolume([{ exId: 'ab_coaster', weight: 0, reps: 15 }]), 0);
 });
 
+test('calcVolume は不正な値を0として扱いNaNを伝播させない', () => {
+  const sets = [
+    { exId: 'lat_pulldown', weight: 35, reps: 10 },
+    { exId: 'lat_pulldown', weight: undefined, reps: 8 }
+  ];
+  assert.equal(calcVolume(sets), 350);
+});
+
 test('週次の総挙上量を月曜始まりで集計する', () => {
   const workouts = [
     { date: '2026-07-27', program: 'A', volume: 1000 }, // 月
@@ -777,13 +802,127 @@ test('週次の総挙上量を月曜始まりで集計する', () => {
   assert.equal(weeks[1].volume, 900);
 });
 
-test('前回のセットを種目ごとに引ける', () => {
+test('weeklyVolume は volume が無い記録を sets から計算して集計する', () => {
+  const workouts = [
+    { date: '2026-07-27', program: 'A', sets: [{ exId: 'seated_row', weight: 30, reps: 10 }] }
+  ];
+  const weeks = weeklyVolume(workouts);
+  assert.equal(weeks.length, 1);
+  assert.equal(weeks[0].volume, 300);
+});
+
+test('weeklyVolume は日付が不正な記録を例外を投げずに除外する', () => {
+  const workouts = [
+    { date: '2026-07-27', program: 'A', volume: 1000 },
+    { date: undefined, program: 'B', volume: 99999 }
+  ];
+  const weeks = weeklyVolume(workouts);
+  assert.equal(weeks.length, 1);
+  assert.equal(weeks[0].volume, 1000);
+});
+
+test('weekKey は月曜始まりのISO週番号を返す', () => {
+  assert.equal(weekKey('2025-12-29'), '2026-W01');
+  assert.equal(weekKey('2026-07-29'), '2026-W31');
+  assert.equal(weekKey('2026-12-31'), '2026-W53');
+  assert.equal(weekKey('2027-01-01'), '2026-W53');
+  assert.equal(weekKey('2027-01-04'), '2027-W01');
+});
+
+test('weekKey は不正な形式の日付で例外を投げる', () => {
+  assert.throws(() => weekKey(undefined));
+  assert.throws(() => weekKey('2026-7-9')); // ゼロ埋めなし
+});
+
+test('前回のセットを種目ごとに引ける（同一セッション内では最後のセットを返す）', () => {
   const workouts = [
     { date: '2026-07-20', program: 'B', sets: [{ exId: 'seated_row', weight: 30, reps: 10 }] },
-    { date: '2026-07-27', program: 'B', sets: [{ exId: 'seated_row', weight: 32.5, reps: 12 }] }
+    {
+      date: '2026-07-27',
+      program: 'B',
+      sets: [
+        { exId: 'seated_row', weight: 32.5, reps: 12 },
+        { exId: 'seated_row', weight: 32.5, reps: 10 },
+        { exId: 'seated_row', weight: 35, reps: 8 }
+      ]
+    }
   ];
-  assert.deepEqual(lastSetsFor(workouts, 'seated_row'), { weight: 32.5, reps: 12 });
-  assert.equal(lastSetsFor(workouts, 'leg_press'), null);
+  assert.deepEqual(lastSetFor(workouts, 'seated_row'), { weight: 35, reps: 8 });
+  assert.equal(lastSetFor(workouts, 'leg_press'), null);
+});
+
+test('記録が無ければ最初のセットはPB', () => {
+  assert.equal(isPB({}, 'seated_row', 30, 10), true);
+});
+
+test('重量が上回ればPB', () => {
+  const bests = { seated_row: { weight: 30, reps: 10, date: '2026-07-20' } };
+  assert.equal(isPB(bests, 'seated_row', 32.5, 8), true);
+});
+
+test('同じ重量で回数が上回ればPB', () => {
+  const bests = { seated_row: { weight: 30, reps: 10, date: '2026-07-20' } };
+  assert.equal(isPB(bests, 'seated_row', 30, 11), true);
+});
+
+test('同じ重量で回数が同じならPBではない', () => {
+  const bests = { seated_row: { weight: 30, reps: 10, date: '2026-07-20' } };
+  assert.equal(isPB(bests, 'seated_row', 30, 10), false);
+});
+
+test('重量が下がれば回数が多くてもPBではない', () => {
+  const bests = { seated_row: { weight: 30, reps: 10, date: '2026-07-20' } };
+  assert.equal(isPB(bests, 'seated_row', 27.5, 20), false);
+});
+
+test('updateBests は元のオブジェクトを壊さない', () => {
+  const bests = { seated_row: { weight: 30, reps: 10, date: '2026-07-20' } };
+  const next = updateBests(bests, 'seated_row', 32.5, 8, '2026-07-29');
+  assert.equal(bests.seated_row.weight, 30);
+  assert.equal(next.seated_row.weight, 32.5);
+  assert.equal(next.seated_row.date, '2026-07-29');
+});
+
+test('PBでなければ updateBests は同じ内容を返す', () => {
+  const bests = { seated_row: { weight: 30, reps: 10, date: '2026-07-20' } };
+  const next = updateBests(bests, 'seated_row', 27.5, 8, '2026-07-29');
+  assert.deepEqual(next.seated_row, bests.seated_row);
+  assert.notEqual(next, bests); // 内容は同じでも新しいオブジェクトを返す
+});
+
+test('updateBests は他種目のPBを保持する', () => {
+  const bests = {
+    seated_row: { weight: 30, reps: 10, date: '2026-07-20' },
+    lat_pulldown: { weight: 40, reps: 8, date: '2026-07-15' }
+  };
+  const next = updateBests(bests, 'seated_row', 32.5, 8, '2026-07-29');
+  assert.deepEqual(next.lat_pulldown, bests.lat_pulldown);
+  assert.deepEqual(next.seated_row, { weight: 32.5, reps: 8, date: '2026-07-29' });
+});
+
+test('脚の日（C）の翌日にバドミントンを入れると警告する', () => {
+  const workouts = [{ date: '2026-07-29', program: 'C' }];
+  assert.equal(warnsBadmintonAfterLegs(workouts, '2026-07-30'), true);
+});
+
+test('脚の日の2日後なら警告しない', () => {
+  const workouts = [{ date: '2026-07-29', program: 'C' }];
+  assert.equal(warnsBadmintonAfterLegs(workouts, '2026-07-31'), false);
+});
+
+test('AやBの翌日は警告しない', () => {
+  const workouts = [{ date: '2026-07-29', program: 'A' }];
+  assert.equal(warnsBadmintonAfterLegs(workouts, '2026-07-30'), false);
+});
+
+test('月をまたぐ脚の日の翌日も警告する', () => {
+  const workouts = [{ date: '2026-07-31', program: 'C' }];
+  assert.equal(warnsBadmintonAfterLegs(workouts, '2026-08-01'), true);
+});
+
+test('年をまたぐ脚の日の翌日も警告する', () => {
+  const workouts = [{ date: '2026-12-31', program: 'C' }];
+  assert.equal(warnsBadmintonAfterLegs(workouts, '2027-01-01'), true);
 });
 ```
 
@@ -797,8 +936,24 @@ Expected: FAIL - `Cannot find module '../js/workout.js'`
 ```js
 export const PROGRAMS = ['A', 'B', 'C'];
 
-/** 日付文字列 'YYYY-MM-DD' の週キー（月曜始まり）を返す。例: '2026-W31' */
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * 日付文字列 'YYYY-MM-DD' の週キー（月曜始まり、ISO 8601週番号）を返す。例: '2026-W31'
+ *
+ * 不正な形式の入力（undefined・ゼロ埋め無しなど）は例外を投げる。これはプログラマの
+ * ミスを黙って通さないための設計判断: 以前は不正入力で 'NaN-WNaN' のような無意味な
+ * キーを返しており、文字列比較では 'N' > '2' のため週次集計の並びの最後（＝「最新週」
+ * として画面に出る位置）に紛れ込んでしまっていた。
+ *
+ * 一方 weeklyVolume() はこの関数と非対称に、不正な日付を持つ記録を例外を投げずに
+ * 除外する。weeklyVolume はインポートされた記録など信頼できない外部データが入りうる
+ * 境界であり、1件の壊れた記録のせいで週次集計全体が例外で落ちるのは避けたいため。
+ */
 export function weekKey(dateStr) {
+  if (typeof dateStr !== 'string' || !DATE_RE.test(dateStr)) {
+    throw new Error(`weekKey: invalid date string: ${dateStr}`);
+  }
   const d = new Date(dateStr + 'T00:00:00Z');
   const day = (d.getUTCDay() + 6) % 7; // 月=0
   d.setUTCDate(d.getUTCDate() - day + 3); // その週の木曜
@@ -814,25 +969,47 @@ function sortedByDate(workouts) {
   return [...workouts].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
 }
 
-/** 曜日ではなく順送りで次のプログラムを決める */
+/**
+ * 曜日ではなく順送りで次のプログラムを決める。
+ * 直近の記録の program が未知（不正値・undefined）な場合は、既知の program を持つ
+ * 直近の記録まで遡って続きを決める。1件の壊れた記録のせいでローテーションが 'A' に
+ * リセットされ、胸の日（A）が2連続になったり脚の日（C）が飛ばされたりする事故を防ぐため。
+ */
 export function nextProgram(workouts) {
-  const sorted = sortedByDate(workouts);
-  const last = sorted[sorted.length - 1];
-  if (!last) return 'A';
-  const index = PROGRAMS.indexOf(last.program);
-  if (index === -1) return 'A';
-  return PROGRAMS[(index + 1) % PROGRAMS.length];
+  const sorted = sortedByDate(workouts).reverse();
+  for (const w of sorted) {
+    const index = PROGRAMS.indexOf(w.program);
+    if (index !== -1) return PROGRAMS[(index + 1) % PROGRAMS.length];
+  }
+  return 'A';
 }
 
-/** 総挙上量 = Σ(重量 × 回数)。補助重量（負値）と自重（0）は0として扱う */
+/**
+ * 総挙上量 = Σ(重量 × 回数)。補助重量（負値）と自重（0）は0として扱う。
+ * weight/reps が数値化できない値（undefined など）でも NaN を伝播させず0として扱う
+ * （防御的丸め）。NaN が混入すると reduce の結果・週合計・XP計算まで汚染され、
+ * さらに JSON.stringify(NaN) は null になるため localStorage に null として永続化され
+ * 以降の計算が恒久的に壊れる。
+ */
 export function calcVolume(sets) {
-  return sets.reduce((sum, s) => sum + Math.max(0, s.weight) * s.reps, 0);
+  return sets.reduce((sum, s) => {
+    const w = Number(s.weight) || 0;
+    const r = Number(s.reps) || 0;
+    return sum + Math.max(0, w) * r;
+  }, 0);
 }
 
-/** 週ごとの総挙上量。週キーの昇順で返す */
+/**
+ * 週ごとの総挙上量。週キーの昇順で返す。
+ * 返す配列は疎(sparse)である: トレーニングの無い週は要素自体が存在しないので、
+ * 呼び出し側は連続した週番号の並びだとみなしてはならない（間の週を0として補完したい
+ * 場合は呼び出し側で行うこと）。
+ * 日付が不正な記録（weekKey が例外を投げる形式）は、集計前に黙って除外する。
+ */
 export function weeklyVolume(workouts) {
   const map = new Map();
   for (const w of workouts) {
+    if (typeof w.date !== 'string' || !DATE_RE.test(w.date)) continue;
     const key = weekKey(w.date);
     const volume = w.volume ?? calcVolume(w.sets ?? []);
     map.set(key, (map.get(key) ?? 0) + volume);
@@ -842,8 +1019,8 @@ export function weeklyVolume(workouts) {
     .map(([week, volume]) => ({ week, volume }));
 }
 
-/** その種目の直近の重量・回数。無ければ null */
-export function lastSetsFor(workouts, exId) {
+/** その種目の直近の重量・回数（同一セッション内では最後に記録したセット）。無ければ null */
+export function lastSetFor(workouts, exId) {
   const sorted = sortedByDate(workouts).reverse();
   for (const w of sorted) {
     const hit = (w.sets ?? []).filter((s) => s.exId === exId).pop();
@@ -951,7 +1128,12 @@ export function isPB(bests, exId, weight, reps) {
   return false;
 }
 
-/** PBのときだけ更新した新しい bests を返す（元は変更しない） */
+/**
+ * PBのときだけ更新した新しい bests を返す（元は変更しない）。
+ * これは浅いコピー（shallow copy）である: 更新していない種目のエントリは入力の
+ * オブジェクトと参照を共有している。呼び出し側は `next[otherExId].reps++` のような
+ * 入れ子側の書き換えをしてはならない（元の bests を壊してしまう）。
+ */
 export function updateBests(bests, exId, weight, reps, date) {
   if (!isPB(bests, exId, weight, reps)) return { ...bests };
   return { ...bests, [exId]: { weight, reps, date } };
@@ -970,7 +1152,7 @@ export function warnsBadmintonAfterLegs(workouts, badmintonDate) {
 - [ ] **Step 4: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（累計46件）
+Expected: PASS（累計55件）
 
 - [ ] **Step 5: Commit**
 
@@ -1165,7 +1347,7 @@ export function bumpFoodUse(foods, foodId) {
 - [ ] **Step 5: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（累計56件）
+Expected: PASS（累計65件）
 
 - [ ] **Step 6: Commit**
 
@@ -1294,7 +1476,7 @@ export function radarData(xpMap) {
 - [ ] **Step 4: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（累計62件）
+Expected: PASS（累計71件）
 
 - [ ] **Step 5: Commit**
 
@@ -1472,7 +1654,7 @@ export function initialPhaseStatus(workouts, meals, todayStr) {
 - [ ] **Step 4: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（累計69件）
+Expected: PASS（累計78件）
 
 - [ ] **Step 5: Commit**
 
@@ -1603,7 +1785,7 @@ export function checkBadges(state) {
 - [ ] **Step 4: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（累計75件）
+Expected: PASS（累計84件）
 
 - [ ] **Step 5: Commit**
 
@@ -1714,7 +1896,7 @@ export function bodySeries(body) {
 - [ ] **Step 4: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（累計81件）
+Expected: PASS（累計90件）
 
 - [ ] **Step 5: Commit**
 
@@ -2148,7 +2330,7 @@ git commit -m "feat: 食事タブとワンタップ登録を追加"
 
 ```js
 import { $, onShow, toast, vibrate, todayStr } from './ui.js';
-import { nextProgram, calcVolume, lastSetsFor, isPB, updateBests } from './workout.js';
+import { nextProgram, calcVolume, lastSetFor, isPB, updateBests } from './workout.js';
 import { addWorkoutXp, checkBadges, BADGES, calcStreak } from './game.js';
 
 const PROGRAM_NAMES = { A: '胸・肩・三頭', B: '背中・二頭', C: '脚・腹' };
@@ -2192,7 +2374,7 @@ export function renderWorkoutTab() {
 }
 
 function renderExercise(ex, workouts, bests) {
-  const last = lastSetsFor(workouts, ex.id);
+  const last = lastSetFor(workouts, ex.id);
   const weight = last?.weight ?? ex.defaultWeight;
   const reps = last?.reps ?? ex.defaultReps;
   const best = bests[ex.id];
@@ -3277,12 +3459,24 @@ function fmt(n) {
   return (n >= 0 ? '+' : '') + n.toFixed(1);
 }
 
+// weeklyVolume の系列は疎（トレーニングが無い週は要素が無い）。
+// 直前の要素が本当に「先週」とは限らないので、週キーが隣接している時だけ先週比を出す。
 function weekSummary(weeks) {
   if (weeks.length < 2) return '2週分たまると先週比が出ます';
-  const last = weeks[weeks.length - 1].volume;
-  const prev = weeks[weeks.length - 2].volume;
-  const diff = Math.round(last - prev);
+  const last = weeks[weeks.length - 1];
+  const prev = weeks[weeks.length - 2];
+  if (prev.week !== previousWeekKey(last.week)) return `前回トレした週(${prev.week})から再開`;
+  const diff = Math.round(last.volume - prev.volume);
   return `先週比 ${diff >= 0 ? '+' : ''}${diff}kg`;
+}
+
+/** 週キーの1つ前の週キーを返す。年またぎは weekKey に計算させる */
+function previousWeekKey(week) {
+  const [year, num] = week.split('-W').map(Number);
+  const jan4 = Date.UTC(year, 0, 4);
+  const monday = new Date(jan4);
+  monday.setUTCDate(monday.getUTCDate() - ((new Date(jan4).getUTCDay() + 6) % 7) + (num - 2) * 7);
+  return weekKey(monday.toISOString().slice(0, 10));
 }
 
 /** 直近8週間のカレンダー。💪ジム 🏸バド 😴休養 */
@@ -3419,9 +3613,13 @@ function thisWeekVolume(weeks, today) {
   return Math.round(weeks.find((w) => w.week === key)?.volume ?? 0);
 }
 
+// 疎な系列なので、週キーが隣接していない場合は「先週比」と呼ばない
 function weekDiff(weeks) {
   if (weeks.length < 2) return '';
-  const diff = Math.round(weeks[weeks.length - 1].volume - weeks[weeks.length - 2].volume);
+  const last = weeks[weeks.length - 1];
+  const prev = weeks[weeks.length - 2];
+  if (prev.week !== previousWeekKey(last.week)) return '';
+  const diff = Math.round(last.volume - prev.volume);
   return diff >= 0 ? `<span class="up">先週比 +${diff}kg ↗</span>` : `先週比 ${diff}kg`;
 }
 
@@ -4012,7 +4210,7 @@ python -m http.server 8080    # ローカル確認
 - [ ] **Step 3: 全テストを流して確認**
 
 Run: `npm test`
-Expected: PASS（累計81件）、失敗0件
+Expected: PASS（累計90件）、失敗0件
 
 - [ ] **Step 4: Commit**
 

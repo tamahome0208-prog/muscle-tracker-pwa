@@ -54,3 +54,27 @@ export function lastSetsFor(workouts, exId) {
   }
   return null;
 }
+
+/** 重量優先、同重量なら回数で自己ベストを判定する */
+export function isPB(bests, exId, weight, reps) {
+  const best = bests[exId];
+  if (!best) return true;
+  if (weight > best.weight) return true;
+  if (weight === best.weight && reps > best.reps) return true;
+  return false;
+}
+
+/** PBのときだけ更新した新しい bests を返す（元は変更しない） */
+export function updateBests(bests, exId, weight, reps, date) {
+  if (!isPB(bests, exId, weight, reps)) return { ...bests };
+  return { ...bests, [exId]: { weight, reps, date } };
+}
+
+/** 脚の日（C）の翌日にバドミントンを入れようとしていれば true */
+export function warnsBadmintonAfterLegs(workouts, badmintonDate) {
+  const target = new Date(badmintonDate + 'T00:00:00Z');
+  const prev = new Date(target);
+  prev.setUTCDate(prev.getUTCDate() - 1);
+  const prevStr = prev.toISOString().slice(0, 10);
+  return workouts.some((w) => w.date === prevStr && w.program === 'C');
+}

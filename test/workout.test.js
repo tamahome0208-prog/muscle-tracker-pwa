@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { nextProgram, calcVolume, weeklyVolume, lastSetsFor } from '../js/workout.js';
+import { nextProgram, calcVolume, weeklyVolume, lastSetsFor, isPB, updateBests, warnsBadmintonAfterLegs } from '../js/workout.js';
 
 test('記録が無ければ最初はA', () => {
   assert.equal(nextProgram([]), 'A');
@@ -57,4 +57,57 @@ test('前回のセットを種目ごとに引ける', () => {
   ];
   assert.deepEqual(lastSetsFor(workouts, 'seated_row'), { weight: 32.5, reps: 12 });
   assert.equal(lastSetsFor(workouts, 'leg_press'), null);
+});
+
+test('記録が無ければ最初のセットはPB', () => {
+  assert.equal(isPB({}, 'seated_row', 30, 10), true);
+});
+
+test('重量が上回ればPB', () => {
+  const bests = { seated_row: { weight: 30, reps: 10, date: '2026-07-20' } };
+  assert.equal(isPB(bests, 'seated_row', 32.5, 8), true);
+});
+
+test('同じ重量で回数が上回ればPB', () => {
+  const bests = { seated_row: { weight: 30, reps: 10, date: '2026-07-20' } };
+  assert.equal(isPB(bests, 'seated_row', 30, 11), true);
+});
+
+test('同じ重量で回数が同じならPBではない', () => {
+  const bests = { seated_row: { weight: 30, reps: 10, date: '2026-07-20' } };
+  assert.equal(isPB(bests, 'seated_row', 30, 10), false);
+});
+
+test('重量が下がれば回数が多くてもPBではない', () => {
+  const bests = { seated_row: { weight: 30, reps: 10, date: '2026-07-20' } };
+  assert.equal(isPB(bests, 'seated_row', 27.5, 20), false);
+});
+
+test('updateBests は元のオブジェクトを壊さない', () => {
+  const bests = { seated_row: { weight: 30, reps: 10, date: '2026-07-20' } };
+  const next = updateBests(bests, 'seated_row', 32.5, 8, '2026-07-29');
+  assert.equal(bests.seated_row.weight, 30);
+  assert.equal(next.seated_row.weight, 32.5);
+  assert.equal(next.seated_row.date, '2026-07-29');
+});
+
+test('PBでなければ updateBests は同じ内容を返す', () => {
+  const bests = { seated_row: { weight: 30, reps: 10, date: '2026-07-20' } };
+  const next = updateBests(bests, 'seated_row', 27.5, 8, '2026-07-29');
+  assert.deepEqual(next.seated_row, bests.seated_row);
+});
+
+test('脚の日（C）の翌日にバドミントンを入れると警告する', () => {
+  const workouts = [{ date: '2026-07-29', program: 'C' }];
+  assert.equal(warnsBadmintonAfterLegs(workouts, '2026-07-30'), true);
+});
+
+test('脚の日の2日後なら警告しない', () => {
+  const workouts = [{ date: '2026-07-29', program: 'C' }];
+  assert.equal(warnsBadmintonAfterLegs(workouts, '2026-07-31'), false);
+});
+
+test('AやBの翌日は警告しない', () => {
+  const workouts = [{ date: '2026-07-29', program: 'A' }];
+  assert.equal(warnsBadmintonAfterLegs(workouts, '2026-07-30'), false);
 });

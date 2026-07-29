@@ -2163,6 +2163,11 @@ test('グラフ用に日付昇順の3系列を返す', () => {
   assert.deepEqual(s.muscle, [45.0, 45.8, 47.0]);
   assert.deepEqual(s.fatPct, [20.0, 18.5, 17.0]);
 });
+
+test('基準日より後の記録が無ければ差分は0（例外にしない）', () => {
+  assert.deepEqual(bodyDiff(BODY, '2026-12-01'), { weight: 0, muscle: 0, fatPct: 0 });
+  assert.deepEqual(bodyDiff([]), { weight: 0, muscle: 0, fatPct: 0 });
+});
 ```
 
 - [ ] **Step 2: テストを実行して失敗を確認**
@@ -2173,8 +2178,26 @@ Expected: FAIL - `Cannot find module '../js/body.js'`
 - [ ] **Step 3: `js/body.js` を実装**
 
 ```js
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** 数値化できない値は0として扱い、NaN/文字列連結の伝播を防ぐ（js/nutrition.js, js/game.js の toNum と同じ） */
+function toNum(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/**
+ * body は storage / store.importAll(配列かどうかしか検証しない) を経由して届く
+ * 未検証データの境界であり、壊れたレコード1件で計算全体を落とさないよう例外を
+ * 投げず読み飛ばす（js/nutrition.js の dayTotals, js/workout.js の weeklyVolume,
+ * js/game.js の checkBadges と同じ設計判断）。null要素と、date が文字列で
+ * YYYY-MM-DD 形式でないレコードを除外する: 後続のソートは日付を文字列比較する
+ * ため、date が undefined 等だと比較が常に false になり並び順が保証できない。
+ */
 function sorted(body) {
-  return [...body].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  return (body ?? [])
+    .filter((b) => b && typeof b.date === 'string' && DATE_RE.test(b.date))
+    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
 }
 
 export function latestBody(body) {
@@ -2189,9 +2212,9 @@ export function bodyDiff(body, since = null) {
   const first = s[0];
   const last = s[s.length - 1];
   return {
-    weight: last.weight - first.weight,
-    muscle: last.muscle - first.muscle,
-    fatPct: last.fatPct - first.fatPct
+    weight: toNum(last.weight) - toNum(first.weight),
+    muscle: toNum(last.muscle) - toNum(first.muscle),
+    fatPct: toNum(last.fatPct) - toNum(first.fatPct)
   };
 }
 
@@ -2200,9 +2223,9 @@ export function bodySeries(body) {
   const s = sorted(body);
   return {
     labels: s.map((b) => b.date),
-    weight: s.map((b) => b.weight),
-    muscle: s.map((b) => b.muscle),
-    fatPct: s.map((b) => b.fatPct)
+    weight: s.map((b) => toNum(b.weight)),
+    muscle: s.map((b) => toNum(b.muscle)),
+    fatPct: s.map((b) => toNum(b.fatPct))
   };
 }
 ```
@@ -2210,7 +2233,7 @@ export function bodySeries(body) {
 - [ ] **Step 4: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（累計102件）
+Expected: PASS（累計103件）
 
 - [ ] **Step 5: Commit**
 
@@ -3952,6 +3975,8 @@ function recordBadminton() {
   renderHomeTab();
 }
 
+// 3項目そろっていない記録は保存しない。body.js は欠損値を0扱いするため、
+// 1項目だけ欠けると差分が実際の値と大きくずれる（例: weight欠損で開始比 +59.8kg）
 function recordBody() {
   const weight = Number(prompt('体重(kg)', '60'));
   const muscle = Number(prompt('筋肉量(kg)', '45'));
@@ -4526,7 +4551,7 @@ python -m http.server 8080    # ローカル確認
 - [ ] **Step 3: 全テストを流して確認**
 
 Run: `npm test`
-Expected: PASS（累計102件）、失敗0件
+Expected: PASS（累計103件）、失敗0件
 
 - [ ] **Step 4: Commit**
 

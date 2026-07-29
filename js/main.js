@@ -1,5 +1,6 @@
 import { createStore } from './store.js';
 import { initTabs, todayStr } from './ui.js';
+import { initMealTab } from './mealTab.js';
 
 export const store = createStore();
 
@@ -22,6 +23,7 @@ async function boot() {
     console.warn('破損したデータを初期化しました:', repaired);
   }
   await loadSeed();
+  initMealTab(store);
   initTabs();
 
   if ('serviceWorker' in navigator) {

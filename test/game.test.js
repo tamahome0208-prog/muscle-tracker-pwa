@@ -131,3 +131,24 @@ test('朝プロテインは11時までの摂取だけを数える', () => {
   ];
   assert.equal(initialPhaseStatus([], meals, '2026-07-29').proteinMornings, 1);
 });
+
+test('同じ朝に2杯飲んでも1日として数える', () => {
+  const meals = [
+    { datetime: '2026-07-27T07:00', items: [{ name: 'プロテイン 1杯', kcal: 120, protein: 24 }] },
+    { datetime: '2026-07-27T09:00', items: [{ name: 'プロテイン 1杯', kcal: 120, protein: 24 }] }
+  ];
+  assert.equal(initialPhaseStatus([], meals, '2026-07-29').proteinMornings, 1);
+});
+
+test('先週の朝プロテインは今週に数えない', () => {
+  const meals = [
+    { datetime: '2026-07-20T07:00', items: [{ name: 'プロテイン 1杯', kcal: 120, protein: 24 }] },
+    { datetime: '2026-07-27T07:00', items: [{ name: 'プロテイン 1杯', kcal: 120, protein: 24 }] }
+  ];
+  assert.equal(initialPhaseStatus([], meals, '2026-07-29').proteinMornings, 1);
+});
+
+test('先週のジムの記録は今週のgymCountに混ざらない', () => {
+  const workouts = [...gymWeek('2026-07-20', 3), ...gymWeek('2026-07-27', 1)];
+  assert.equal(initialPhaseStatus(workouts, [], '2026-07-29').gymCount, 1);
+});

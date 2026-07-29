@@ -2,6 +2,7 @@ import { createStore } from './store.js';
 import { initTabs, todayStr } from './ui.js';
 import { initMealTab } from './mealTab.js';
 import { initWorkoutTab } from './workoutTab.js';
+import { initPhotoTab, stopCamera } from './photoTab.js';
 
 export const store = createStore();
 
@@ -26,11 +27,18 @@ async function boot() {
   await loadSeed();
   initMealTab(store);
   initWorkoutTab(store);
+  initPhotoTab(store);
   initTabs();
 
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }
+
+  document.querySelectorAll('#tabbar button').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (btn.dataset.tab !== 'photo') stopCamera();
+    });
+  });
 }
 
 boot();

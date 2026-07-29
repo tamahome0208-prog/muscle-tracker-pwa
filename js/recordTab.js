@@ -43,7 +43,10 @@ export function renderRecordTab() {
     <div class="card">
       <h2 style="margin-top:0">称号</h2>
       ${BADGES.map((b) => {
-        const owned = game.badges.includes(b.id);
+        // game は object キーなので、入れ子の badges は store.js の型検証を通らない。
+        // game.js の checkBadges と同じガードを置き、壊れていても記録タブ全体を落とさない
+        const ownedBadges = Array.isArray(game.badges) ? game.badges : [];
+        const owned = ownedBadges.includes(b.id);
         return `<div class="ex"><div class="ex-head"><span class="ex-name">${owned ? '🎖 ' + b.name : '🔒 ???'}</span></div>
           <div class="muted">${owned ? b.desc : '未解放'}</div></div>`;
       }).join('')}

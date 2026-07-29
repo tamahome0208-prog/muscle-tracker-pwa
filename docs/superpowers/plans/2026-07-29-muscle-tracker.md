@@ -1428,12 +1428,13 @@ git commit -m "feat: 食事集計と死守2項目の判定を追加"
 
 - [ ] **Step 1: 失敗するテストを書く**
 
-`test/game.test.js`（Task 8・9 で追記するテストは含まない）:
+`test/game.test.js`（Task 8 の追記分まで含む最終形。Task 9 の称号テストは別途追記）:
 
 ```js
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PARTS, levelFromXp, addWorkoutXp, radarData } from '../js/game.js';
+import { calcStreak, isInitialPhase, initialPhaseStatus } from '../js/game.js';
 
 const EXERCISES = [
   { id: 'lat_pulldown', part: 'back' },
@@ -1497,6 +1498,93 @@ test('xpMap に無い部位もレベル0で必ず含める（弱点部位が消�
   assert.equal(data.find((d) => d.part === 'leg').level, 0);
   assert.equal(data.find((d) => d.part === 'leg').xp, 0);
 });
+
+function gymWeek(mondayDate, count) {
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    const d = new Date(mondayDate + 'T00:00:00Z');
+    d.setUTCDate(d.getUTCDate() + i * 2);
+    out.push({ date: d.toISOString().slice(0, 10), program: 'A' });
+  }
+  return out;
+}
+
+test('週3回達成した週が連続していればストリークが伸びる', () => {
+  const workouts = [
+    ...gymWeek('2026-07-13', 3),
+    ...gymWeek('2026-07-20', 3),
+    ...gymWeek('2026-07-27', 3)
+  ];
+  assert.equal(calcStreak(workouts, '2026-07-29'), 3);
+});
+
+test('週2回しかできなかった週でストリークが切れる', () => {
+  const workouts = [
+    ...gymWeek('2026-07-13', 3),
+    ...gymWeek('2026-07-20', 2),
+    ...gymWeek('2026-07-27', 3)
+  ];
+  assert.equal(calcStreak(workouts, '2026-07-29'), 1);
+});
+
+test('進行中の週はまだ3回に達していなくてもストリークを切らない', () => {
+  const workouts = [
+    ...gymWeek('2026-07-20', 3),
+    ...gymWeek('2026-07-27', 1) // 今週はまだ1回
+  ];
+  assert.equal(calcStreak(workouts, '2026-07-29'), 1);
+});
+
+test('記録が無ければ0', () => {
+  assert.equal(calcStreak([], '2026-07-29'), 0);
+});
+
+test('開始から28日未満は初期モード', () => {
+  assert.equal(isInitialPhase('2026-07-01', '2026-07-28'), true);
+  assert.equal(isInitialPhase('2026-07-01', '2026-07-29'), false);
+});
+
+test('初期モードでは週3ジムと朝プロテインの2つだけを評価する', () => {
+  const workouts = gymWeek('2026-07-27', 3);
+  const meals = [
+    { datetime: '2026-07-27T07:00', items: [{ name: 'プロテイン 1杯', kcal: 120, protein: 24 }] },
+    { datetime: '2026-07-28T07:30', items: [{ name: 'プロテイン 1杯', kcal: 120, protein: 24 }] }
+  ];
+  const s = initialPhaseStatus(workouts, meals, '2026-07-29');
+  assert.equal(s.gymCount, 3);
+  assert.equal(s.gymDone, true);
+  assert.equal(s.proteinMornings, 2);
+  assert.deepEqual(Object.keys(s).sort(), ['gymCount', 'gymDone', 'proteinMornings']);
+});
+
+test('朝プロテインは11時までの摂取だけを数える', () => {
+  const meals = [
+    { datetime: '2026-07-27T07:00', items: [{ name: 'プロテイン 1杯', kcal: 120, protein: 24 }] },
+    { datetime: '2026-07-28T15:00', items: [{ name: 'プロテイン 1杯', kcal: 120, protein: 24 }] }
+  ];
+  assert.equal(initialPhaseStatus([], meals, '2026-07-29').proteinMornings, 1);
+});
+
+test('同じ朝に2杯飲んでも1日として数える', () => {
+  const meals = [
+    { datetime: '2026-07-27T07:00', items: [{ name: 'プロテイン 1杯', kcal: 120, protein: 24 }] },
+    { datetime: '2026-07-27T09:00', items: [{ name: 'プロテイン 1杯', kcal: 120, protein: 24 }] }
+  ];
+  assert.equal(initialPhaseStatus([], meals, '2026-07-29').proteinMornings, 1);
+});
+
+test('先週の朝プロテインは今週に数えない', () => {
+  const meals = [
+    { datetime: '2026-07-20T07:00', items: [{ name: 'プロテイン 1杯', kcal: 120, protein: 24 }] },
+    { datetime: '2026-07-27T07:00', items: [{ name: 'プロテイン 1杯', kcal: 120, protein: 24 }] }
+  ];
+  assert.equal(initialPhaseStatus([], meals, '2026-07-29').proteinMornings, 1);
+});
+
+test('先週のジムの記録は今週のgymCountに混ざらない', () => {
+  const workouts = [...gymWeek('2026-07-20', 3), ...gymWeek('2026-07-27', 1)];
+  assert.equal(initialPhaseStatus(workouts, [], '2026-07-29').gymCount, 1);
+});
 ```
 
 - [ ] **Step 2: テストを実行して失敗を確認**
@@ -1507,7 +1595,7 @@ Expected: FAIL - `Cannot find module '../js/game.js'`
 - [ ] **Step 3: `js/game.js` を実装**
 
 ```js
-import { calcVolume } from './workout.js';
+import { calcVolume, weekKey } from './workout.js';
 
 export const PARTS = ['chest', 'back', 'shoulder', 'leg', 'arm', 'abs'];
 
@@ -1687,6 +1775,7 @@ function shiftWeeks(dateStr, delta) {
 export function calcStreak(workouts, todayStr) {
   const counts = new Map();
   for (const w of workouts) {
+    if (typeof w.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(w.date)) continue;
     const key = weekKey(w.date);
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }
@@ -1723,15 +1812,20 @@ export function isInitialPhase(startDate, todayStr) {
  */
 export function initialPhaseStatus(workouts, meals, todayStr) {
   const thisWeek = weekKey(todayStr);
-  const gymCount = workouts.filter((w) => weekKey(w.date) === thisWeek).length;
+  const gymCount = (workouts ?? []).filter((w) => {
+    if (typeof w.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(w.date)) return false;
+    return weekKey(w.date) === thisWeek;
+  }).length;
 
   const proteinMornings = new Set();
-  for (const meal of meals) {
+  for (const meal of meals ?? []) {
+    if (typeof meal?.datetime !== 'string') continue;
     const [date, time = ''] = meal.datetime.split('T');
+    if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
     if (weekKey(date) !== thisWeek) continue;
     const hour = Number(time.slice(0, 2));
     if (Number.isNaN(hour) || hour >= 11) continue;
-    const hasProtein = (meal.items ?? []).some((i) => i.name.includes('プロテイン'));
+    const hasProtein = (meal.items ?? []).some((i) => typeof i?.name === 'string' && i.name.includes('プロテイン'));
     if (hasProtein) proteinMornings.add(date);
   }
 
@@ -1742,7 +1836,7 @@ export function initialPhaseStatus(workouts, meals, todayStr) {
 - [ ] **Step 4: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（累計82件）
+Expected: PASS（累計85件）
 
 - [ ] **Step 5: Commit**
 
@@ -1873,7 +1967,7 @@ export function checkBadges(state) {
 - [ ] **Step 4: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（累計88件）
+Expected: PASS（累計91件）
 
 - [ ] **Step 5: Commit**
 
@@ -1984,7 +2078,7 @@ export function bodySeries(body) {
 - [ ] **Step 4: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（累計94件）
+Expected: PASS（累計97件）
 
 - [ ] **Step 5: Commit**
 
@@ -4300,7 +4394,7 @@ python -m http.server 8080    # ローカル確認
 - [ ] **Step 3: 全テストを流して確認**
 
 Run: `npm test`
-Expected: PASS（累計94件）、失敗0件
+Expected: PASS（累計97件）、失敗0件
 
 - [ ] **Step 4: Commit**
 

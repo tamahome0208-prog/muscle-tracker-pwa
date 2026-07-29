@@ -140,6 +140,23 @@ git commit -m "chore: プロジェクト初期化とテスト環境"
 
 `store.js` は「保存・読み込み・破損検証」だけを担当する。localStorage に触るのはこのファイルだけ。
 
+**設計上の要点（コードレビューで確定した事項）:**
+
+1. **永続化してからキャッシュを更新する。** 逆順だと `setItem` が QuotaExceededError で失敗しても
+   `get()` が「保存済み」と答えてしまい、ジムで記録した1セットが画面上は残ってリロードで消える。
+2. **`get`/`set` はスナップショット（clone）を扱う。** キャッシュの実体を返すと、呼び出し側が
+   `set` を忘れて mutate したときに「そのセッション中だけ存在してリロードで消える」幽霊データになる。
+3. **デフォルトのマージは再帰的に行う。** 浅いマージだと `profile.targets` や `game.xp` の
+   ネストした項目を補えず、`kcalFloor` が `undefined` になってカロリー下限警告が壊れる。
+4. **`get` と `set` は同じ `normalize()` を通す。** 通さないと、`set` 直後とリロード後で
+   `get` の結果が変わるという再現しづらいバグになる。
+5. **`importAll` は書き込み前に全キーを検証する。** 検証しないと `{"workouts":"garbage"}` を
+   そのまま書き込んで1年分の履歴を壊し、次回起動の `validate()` がそれを `[]` に「修復」して確定的に失う。
+   途中で `setItem` が失敗した場合は書き込み済みの分を元に戻す。
+6. **`exportAll` は Gemini APIキーを出力しない。** バックアップJSONは端末外（Drive・自分宛メール等）に
+   持ち出される可能性が最も高いファイルで、そこに認証情報を平文で載せない。
+   インポート時に空なら端末側の既存キーを維持する。
+
 - [ ] **Step 1: 失敗するテストを書く**
 
 `test/store.test.js`:
@@ -199,6 +216,176 @@ test('importAll は不正なJSONで例外を投げ、既存データを壊さな
   assert.throws(() => store.importAll('壊れた'), /インポート/);
   assert.equal(store.get('meals')[0].id, 'keep');
 });
+
+// --- 以下、コード品質レビューで指摘された観点の回帰テスト ---
+
+test('set は同じ storage を渡した別インスタンスからも読み戻せる(実際に永続化される)', () => {
+  const storage = memoryStorage();
+  const store1 = createStore(storage);
+  store1.set('workouts', [{ id: 'w1' }]);
+  const store2 = createStore(storage);
+  assert.equal(store2.get('workouts').length, 1);
+  assert.equal(store2.get('workouts')[0].id, 'w1');
+});
+
+test('set は storage の生JSONにも正しい形で書き込む', () => {
+  const storage = memoryStorage();
+  const store = createStore(storage);
+  store.set('workouts', [{ id: 'w1' }]);
+  assert.deepEqual(JSON.parse(storage.getItem('mt.workouts')), [{ id: 'w1' }]);
+});
+
+test('validate() の修復は storage 側にも反映される', () => {
+  const storage = memoryStorage({ 'mt.workouts': '{{{壊れたJSON' });
+  const store = createStore(storage);
+  store.validate();
+  assert.deepEqual(JSON.parse(storage.getItem('mt.workouts')), []);
+});
+
+test('read-modify-write パターンを別インスタンスを跨いで繰り返しても一貫した結果になる', () => {
+  const storage = memoryStorage();
+  const store1 = createStore(storage);
+  const w1 = store1.get('workouts');
+  w1.push({ id: 'w1' });
+  store1.set('workouts', w1);
+
+  const store2 = createStore(storage);
+  const w2 = store2.get('workouts');
+  w2.push({ id: 'w2' });
+  store2.set('workouts', w2);
+
+  const store3 = createStore(storage);
+  assert.equal(store3.get('workouts').length, 2);
+});
+
+test('get で返した値を mutate しても set しない限り保存されない(ゴーストデータ防止)', () => {
+  const storage = memoryStorage();
+  const store = createStore(storage);
+  const workouts = store.get('workouts');
+  workouts.push({ id: 'ghost' });
+  assert.equal(store.get('workouts').length, 0);
+  assert.equal(storage.getItem('mt.workouts'), null);
+});
+
+test('setItem が失敗した場合、キャッシュも更新されない', () => {
+  const storage = memoryStorage();
+  const realSetItem = storage.setItem.bind(storage);
+  let shouldFail = false;
+  storage.setItem = (k, v) => {
+    if (shouldFail) throw new Error('QuotaExceededError');
+    realSetItem(k, v);
+  };
+  const store = createStore(storage);
+  store.set('workouts', [{ id: 'w1' }]);
+  shouldFail = true;
+  assert.throws(() => store.set('workouts', [{ id: 'w1' }, { id: 'w2' }]));
+  assert.equal(store.get('workouts').length, 1);
+});
+
+test('部分的な profile を保存してもデフォルトのネスト項目が再帰的に補われる', () => {
+  const storage = memoryStorage({
+    'mt.profile': JSON.stringify({ targets: { protein: 120 } })
+  });
+  const store = createStore(storage);
+  const profile = store.get('profile');
+  assert.equal(profile.targets.protein, 120);
+  assert.equal(profile.targets.kcalFloor, 1500);
+  assert.equal(profile.height, 162);
+});
+
+test('importAll は不正な形式のキーを含む場合、何も書き込まずに例外を投げる', () => {
+  const storage = memoryStorage();
+  const store = createStore(storage);
+  store.set('meals', [{ id: 'keep' }]);
+  assert.throws(
+    () => store.importAll(JSON.stringify({ workouts: 'garbage', meals: [{ id: 'new' }] })),
+    /インポート/
+  );
+  assert.equal(store.get('meals')[0].id, 'keep');
+  assert.equal(store.get('workouts').length, 0);
+});
+
+test('importAll 途中で setItem が失敗したら書き込み済みの分も元に戻す', () => {
+  const storage = memoryStorage();
+  const store = createStore(storage);
+  store.set('workouts', [{ id: 'old-w' }]);
+  store.set('meals', [{ id: 'old-m' }]);
+
+  const realSetItem = storage.setItem.bind(storage);
+  let failOnMeals = false;
+  storage.setItem = (k, v) => {
+    if (failOnMeals && k === 'mt.meals') throw new Error('QuotaExceededError');
+    realSetItem(k, v);
+  };
+
+  failOnMeals = true;
+  assert.throws(() => store.importAll(JSON.stringify({
+    workouts: [{ id: 'new-w' }],
+    meals: [{ id: 'new-m' }]
+  })));
+  failOnMeals = false;
+
+  // カウンター経由(store.get)ではなく storage の生JSONを直接見て、
+  // キャッシュ側だけ元に戻っていて storage 側が壊れたまま、という事態を検知できるようにする。
+  assert.equal(JSON.parse(storage.getItem('mt.workouts'))[0].id, 'old-w');
+  assert.equal(JSON.parse(storage.getItem('mt.meals'))[0].id, 'old-m');
+  assert.equal(store.get('workouts')[0].id, 'old-w');
+  assert.equal(store.get('meals')[0].id, 'old-m');
+});
+
+test('get/set に未知のキーを渡すと例外になる', () => {
+  const store = createStore(memoryStorage());
+  assert.throws(() => store.get('unknown'), /未知のキー/);
+  assert.throws(() => store.set('unknown', {}), /未知のキー/);
+});
+
+test('exportAll は geminiKey を含めない', () => {
+  const store = createStore(memoryStorage());
+  store.set('settings', { geminiKey: 'secret-key', useOpenFoodFacts: true, photoReminder: true });
+  const json = JSON.parse(store.exportAll());
+  assert.equal(json.settings.geminiKey, '');
+});
+
+test('importAll で geminiKey が空なら端末側の既存キーを維持する', () => {
+  const store = createStore(memoryStorage());
+  store.set('settings', { geminiKey: 'existing-key', useOpenFoodFacts: true, photoReminder: true });
+  store.importAll(JSON.stringify({ settings: { geminiKey: '', useOpenFoodFacts: false, photoReminder: false } }));
+  assert.equal(store.get('settings').geminiKey, 'existing-key');
+  assert.equal(store.get('settings').useOpenFoodFacts, false);
+});
+
+// --- 再レビュー(N1〜N7)対応の回帰テスト ---
+
+test('set() は型が違う値を拒否し、storage を壊さない', () => {
+  const storage = memoryStorage();
+  const store = createStore(storage);
+  assert.throws(() => store.set('profile', 'garbage'), /不正な値/);
+  assert.throws(() => store.set('workouts', null), /不正な値/);
+  assert.throws(() => store.set('workouts', 42), /不正な値/);
+  assert.throws(() => store.set('profile', undefined), /不正な値/);
+  assert.equal(storage.getItem('mt.profile'), null);
+  assert.equal(storage.getItem('mt.workouts'), null);
+});
+
+test('set() は normalize を通す: 部分的な profile を渡してもデフォルトのネスト項目が補われる', () => {
+  const store = createStore(memoryStorage());
+  store.set('profile', { height: 170 });
+  assert.equal(store.get('profile').targets.kcalFloor, 1500);
+  assert.equal(store.get('profile').height, 170);
+});
+
+test('DEFAULTS は deep freeze されており、ネストしたプロパティの書き換えも例外になる', () => {
+  assert.throws(() => { DEFAULTS.profile.height = 1; });
+  assert.throws(() => { DEFAULTS.profile.targets.protein = 1; });
+  assert.throws(() => { DEFAULTS.workouts.push({}); });
+});
+
+test('validate() は mt. 以外のキーには一切触らない', () => {
+  const storage = memoryStorage({ 'other-app.settings': 'untouched-value' });
+  const store = createStore(storage);
+  store.validate();
+  assert.equal(storage.getItem('other-app.settings'), 'untouched-value');
+});
 ```
 
 - [ ] **Step 2: テストを実行して失敗を確認**
@@ -209,9 +396,29 @@ Expected: FAIL - `Cannot find module '../js/store.js'`
 - [ ] **Step 3: `js/store.js` を実装**
 
 ```js
+// このモジュールの契約(store.js を利用する全モジュールが前提としてよいこと):
+//
+// 1. get() が返す値は常にコピーである。呼び出し側がその場で mutate しても、
+//    set() を呼ばない限り永続化(localStorage)にもキャッシュにも反映されない。
+//    例: const w = store.get('workouts'); w.push(x); // ここではまだ何も保存されていない
+//        store.set('workouts', w);                    // この行で初めて保存される
+//
+// 2. 参照の同一性は保証されない。
+//    store.get('workouts')[0] !== store.get('workouts')[0] (呼ぶたびに新しいコピー)。
+//    そのため `===` によるオブジェクト比較や、エンティティそのものをキーにした
+//    Set/Map には依存しないこと。id などのプリミティブ値で同一性を判定すること。
+
 export const SCHEMA_VERSION = 1;
 
-export const DEFAULTS = {
+function deepFreeze(value) {
+  if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const v of Object.values(value)) deepFreeze(v);
+  }
+  return value;
+}
+
+export const DEFAULTS = deepFreeze({
   profile: {
     height: 162,
     startDate: null,
@@ -231,19 +438,46 @@ export const DEFAULTS = {
     badges: []
   },
   settings: { geminiKey: '', useOpenFoodFacts: true, photoReminder: true }
-};
+});
 
 const KEY_PREFIX = 'mt.';
 const isArrayKey = (key) => Array.isArray(DEFAULTS[key]);
+const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+// プレーンオブジェクトは再帰的にマージし、配列やプリミティブは丸ごと置き換える。
+// 保存済みデータに一部の項目しか無くても、後から DEFAULTS に増えたネストした項目を補える。
+function deepMerge(base, override) {
+  if (!isPlainObject(base) || !isPlainObject(override)) {
+    return override === undefined ? base : override;
+  }
+  const result = { ...base };
+  for (const key of Object.keys(override)) {
+    result[key] = isPlainObject(base[key]) && isPlainObject(override[key])
+      ? deepMerge(base[key], override[key])
+      : override[key];
+  }
+  return result;
+}
+
+function isValidFor(key, value) {
+  if (!(key in DEFAULTS)) return false;
+  return isArrayKey(key) ? Array.isArray(value) : isPlainObject(value);
+}
+
 export function createStore(storage = globalThis.localStorage) {
   const cache = new Map();
 
-  function readRaw(key) {
+  // get/set で同じ正規化を通す: 配列はそのまま(クローンのみ)、オブジェクトは DEFAULTS と再帰マージ。
+  function normalize(key, value) {
+    return isArrayKey(key) ? clone(value) : deepMerge(DEFAULTS[key], value);
+  }
+
+  // 保存済みJSONを読み、パース失敗・型不一致を破損として検出したうえで正規化まで行う。
+  function readValidated(key) {
     const raw = storage.getItem(KEY_PREFIX + key);
     if (raw === null) return { ok: true, value: clone(DEFAULTS[key]) };
     let parsed;
@@ -252,76 +486,136 @@ export function createStore(storage = globalThis.localStorage) {
     } catch {
       return { ok: false, value: clone(DEFAULTS[key]) };
     }
-    const typeOk = isArrayKey(key)
-      ? Array.isArray(parsed)
-      : parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed);
-    if (!typeOk) return { ok: false, value: clone(DEFAULTS[key]) };
-    return { ok: true, value: parsed };
+    if (!isValidFor(key, parsed)) return { ok: false, value: clone(DEFAULTS[key]) };
+    return { ok: true, value: normalize(key, parsed) };
   }
 
-  return {
-    get(key) {
-      if (!(key in DEFAULTS)) throw new Error(`未知のキー: ${key}`);
-      if (!cache.has(key)) {
-        const { value } = readRaw(key);
-        // オブジェクト系はデフォルトを土台にマージし、後から増えた項目を補う
-        cache.set(key, isArrayKey(key) ? value : { ...clone(DEFAULTS[key]), ...value });
-      }
-      return cache.get(key);
-    },
+  function get(key) {
+    if (!(key in DEFAULTS)) throw new Error(`未知のキー: ${key}`);
+    if (!cache.has(key)) {
+      const { value } = readValidated(key);
+      cache.set(key, clone(value));
+    }
+    // キャッシュの実体ではなくスナップショットを返す。呼び出し側が set せずに mutate しても
+    // キャッシュ/永続化には影響しない(= set し忘れによる「リロードで消えるゴーストデータ」を防ぐ)。
+    return clone(cache.get(key));
+  }
 
-    set(key, value) {
-      if (!(key in DEFAULTS)) throw new Error(`未知のキー: ${key}`);
-      cache.set(key, value);
-      storage.setItem(KEY_PREFIX + key, JSON.stringify(value));
-      return value;
-    },
+  function set(key, value) {
+    if (!(key in DEFAULTS)) throw new Error(`未知のキー: ${key}`);
+    if (!isValidFor(key, value)) {
+      const expected = isArrayKey(key) ? '配列' : 'オブジェクト';
+      throw new Error(`不正な値です(${key}): ${expected} を指定してください`);
+    }
+    const normalized = normalize(key, value);
+    // 先に永続化し、成功した場合のみキャッシュを更新する。
+    // setItem が QuotaExceededError 等で失敗した場合、キャッシュは古いままになり
+    // get() が「保存済み」と偽って答えることがない。
+    storage.setItem(KEY_PREFIX + key, JSON.stringify(normalized));
+    cache.set(key, clone(normalized));
+    return clone(normalized);
+  }
 
-    /** 全キーを検証し、壊れていたキーだけ初期化する。戻り値は修復したキー名の配列 */
-    validate() {
-      const repaired = [];
-      for (const key of Object.keys(DEFAULTS)) {
-        const { ok, value } = readRaw(key);
-        if (!ok) {
-          repaired.push(key);
-          cache.set(key, value);
-          storage.setItem(KEY_PREFIX + key, JSON.stringify(value));
-        }
-      }
-      storage.setItem(KEY_PREFIX + 'schemaVersion', String(SCHEMA_VERSION));
-      return repaired;
-    },
-
-    exportAll() {
-      const out = { schemaVersion: SCHEMA_VERSION };
-      for (const key of Object.keys(DEFAULTS)) out[key] = this.get(key);
-      return JSON.stringify(out, null, 2);
-    },
-
-    importAll(json) {
-      let data;
-      try {
-        data = JSON.parse(json);
-      } catch {
-        throw new Error('インポートに失敗しました: JSONとして読めません');
-      }
-      if (data === null || typeof data !== 'object') {
-        throw new Error('インポートに失敗しました: 形式が不正です');
-      }
-      for (const key of Object.keys(DEFAULTS)) {
-        if (key in data) this.set(key, data[key]);
+  function validate() {
+    const repaired = [];
+    for (const key of Object.keys(DEFAULTS)) {
+      const { ok, value } = readValidated(key);
+      if (!ok) {
+        repaired.push(key);
+        storage.setItem(KEY_PREFIX + key, JSON.stringify(value));
+        cache.set(key, clone(value));
       }
     }
-  };
+    storage.setItem(KEY_PREFIX + 'schemaVersion', String(SCHEMA_VERSION));
+    return repaired;
+  }
+
+  function exportAll() {
+    const out = { schemaVersion: SCHEMA_VERSION };
+    for (const key of Object.keys(DEFAULTS)) out[key] = get(key);
+    // Gemini APIキーはバックアップ(端末外に持ち出される可能性が高いファイル)には含めない。
+    if (out.settings) out.settings = { ...out.settings, geminiKey: '' };
+    return JSON.stringify(out, null, 2);
+  }
+
+  function importAll(json) {
+    let data;
+    try {
+      data = JSON.parse(json);
+    } catch {
+      throw new Error('インポートに失敗しました: JSONとして読めません');
+    }
+    if (!isPlainObject(data)) {
+      throw new Error('インポートに失敗しました: 形式が不正です');
+    }
+
+    const targetKeys = Object.keys(DEFAULTS).filter((key) => key in data);
+
+    // 書き込み前に全キーの形式を検証する。1つでも不正なら何も書き込まずに例外を投げる。
+    for (const key of targetKeys) {
+      if (!isValidFor(key, data[key])) {
+        throw new Error(`インポートに失敗しました: ${key} の形式が不正です`);
+      }
+    }
+
+    // Gemini APIキーが空でインポートされた場合は、端末に既にある値を維持する
+    // (同じ端末へ復元する際にキーを入れ直さずに済むように)。
+    if (targetKeys.includes('settings') && !data.settings.geminiKey) {
+      data.settings = { ...data.settings, geminiKey: get('settings').geminiKey };
+    }
+
+    const previousRaw = new Map();
+    for (const key of targetKeys) previousRaw.set(key, storage.getItem(KEY_PREFIX + key));
+
+    const applied = [];
+    try {
+      for (const key of targetKeys) {
+        set(key, data[key]);
+        applied.push(key);
+      }
+    } catch (err) {
+      // 途中で setItem が失敗した場合、書き込み済みだった分を元の値に戻してから再スローする。
+      // ロールバック自体の setItem/removeItem も(容量逼迫時などに)失敗しうるため、
+      // 1件ずつ try/catch で囲んで残りの復元を続行し、元の例外(原因)を消さずに再スローする。
+      const failedRollbacks = [];
+      for (const key of applied) {
+        try {
+          const prev = previousRaw.get(key);
+          if (prev === null) storage.removeItem(KEY_PREFIX + key);
+          else storage.setItem(KEY_PREFIX + key, prev);
+          cache.delete(key);
+        } catch {
+          failedRollbacks.push(key);
+        }
+      }
+      if (failedRollbacks.length > 0) {
+        err.message += ` (ロールバックにも失敗したキー: ${failedRollbacks.join(', ')})`;
+      }
+      throw err;
+    }
+  }
+
+  return { get, set, validate, exportAll, importAll };
 }
 ```
 
 - [ ] **Step 4: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（累計9件）
+Expected: PASS（累計25件）
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: 永続化が本当にテストされているか確認する（ミューテーションテスト）**
+
+永続化層のテストは、キャッシュ経由でしか読み戻していないと「永続化していなくても通る」状態になりやすい。
+一時的に `set()` 内の `storage.setItem(...)` の行を無効化して `npm test` を実行し、
+**テストが失敗すること**を確認してから元に戻す。
+
+Expected: 5件が fail する（0件しか落ちないなら、テストがキャッシュしか見ていない）
+
+同様に次の変異でもテストが落ちることを確認する。いずれも1件ずつ落ちる:
+`set()` の `normalize` 呼び出し除去 / `set()` の型検証除去 / `deepMerge` を浅いマージに変更 / `DEFAULTS` の `deepFreeze` 除去
+
+- [ ] **Step 6: Commit**
 
 ```bash
 git add js/store.js test/store.test.js
@@ -409,7 +703,7 @@ Expected: FAIL - `ENOENT ... data/exercises.json`
 - [ ] **Step 4: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（累計12件）
+Expected: PASS（累計28件）
 
 - [ ] **Step 5: Commit**
 
@@ -562,7 +856,7 @@ export function lastSetsFor(workouts, exId) {
 - [ ] **Step 4: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（累計20件）
+Expected: PASS（累計36件）
 
 - [ ] **Step 5: Commit**
 
@@ -676,7 +970,7 @@ export function warnsBadmintonAfterLegs(workouts, badmintonDate) {
 - [ ] **Step 4: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（累計30件）
+Expected: PASS（累計46件）
 
 - [ ] **Step 5: Commit**
 
@@ -871,7 +1165,7 @@ export function bumpFoodUse(foods, foodId) {
 - [ ] **Step 5: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（累計40件）
+Expected: PASS（累計56件）
 
 - [ ] **Step 6: Commit**
 
@@ -1000,7 +1294,7 @@ export function radarData(xpMap) {
 - [ ] **Step 4: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（累計46件）
+Expected: PASS（累計62件）
 
 - [ ] **Step 5: Commit**
 
@@ -1178,7 +1472,7 @@ export function initialPhaseStatus(workouts, meals, todayStr) {
 - [ ] **Step 4: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（累計53件）
+Expected: PASS（累計69件）
 
 - [ ] **Step 5: Commit**
 
@@ -1309,7 +1603,7 @@ export function checkBadges(state) {
 - [ ] **Step 4: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（累計59件）
+Expected: PASS（累計75件）
 
 - [ ] **Step 5: Commit**
 
@@ -1420,7 +1714,7 @@ export function bodySeries(body) {
 - [ ] **Step 4: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（累計65件）
+Expected: PASS（累計81件）
 
 - [ ] **Step 5: Commit**
 
@@ -3718,7 +4012,7 @@ python -m http.server 8080    # ローカル確認
 - [ ] **Step 3: 全テストを流して確認**
 
 Run: `npm test`
-Expected: PASS（累計65件）、失敗0件
+Expected: PASS（累計81件）、失敗0件
 
 - [ ] **Step 4: Commit**
 

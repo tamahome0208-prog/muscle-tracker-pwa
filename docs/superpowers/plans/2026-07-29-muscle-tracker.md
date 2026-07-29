@@ -1253,6 +1253,32 @@ test('bumpFoodUse は使用回数を1増やした新しい配列を返す', () =
   assert.equal(foods[0].useCount, 3);
   assert.equal(next[0].useCount, 4);
 });
+
+test('まだ何も記録していない日(kcal:0)は「食べなさすぎ」警告を出さない', () => {
+  const t = dayTotals([], '2026-07-29');
+  assert.deepEqual(t, { kcal: 0, protein: 0, alcoholMl: 0 });
+  const a = achievement(t, TARGETS);
+  assert.ok(!a.warnings.some((w) => w.type === 'kcalFloor'));
+});
+
+test('dayTotals は壊れたmealレコードを例外を投げずに読み飛ばす', () => {
+  const meals = [
+    { id: 'ok', datetime: '2026-07-29T19:00', items: [{ kcal: 100, protein: 10 }] },
+    { id: 'no-datetime', items: [{ kcal: 999, protein: 99 }] },
+    { id: 'null-datetime', datetime: null, items: [{ kcal: 999, protein: 99 }] },
+    null,
+    { id: 'items-not-array', datetime: '2026-07-29T20:00', items: 'garbage' }
+  ];
+  assert.deepEqual(dayTotals(meals, '2026-07-29'), { kcal: 100, protein: 10, alcoholMl: 0 });
+});
+
+test('targetsの分母が0または非有限なら達成率は0%として扱う（Infinity/NaNを出さない）', () => {
+  const a1 = achievement({ kcal: 1750, protein: 100, alcoholMl: 0 }, { ...TARGETS, protein: 0 });
+  assert.equal(a1.proteinPct, 0);
+
+  const a2 = achievement({ kcal: 1750, protein: 100, alcoholMl: 0 }, { ...TARGETS, kcalMin: 0 });
+  assert.equal(a2.kcalPct, 0);
+});
 ```
 
 - [ ] **Step 2: テストを実行して失敗を確認**
@@ -1263,15 +1289,31 @@ Expected: FAIL - `Cannot find module '../js/nutrition.js'`
 - [ ] **Step 3: `js/nutrition.js` を実装**
 
 ```js
-/** その日の kcal / タンパク質 / アルコール量を合計する */
+/** 数値化できない値は0として扱い、NaN/文字列連結の伝播を防ぐ */
+function toNum(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/**
+ * その日の kcal / タンパク質 / アルコール量を合計する。
+ *
+ * meals は OCR 経路や store.importAll(配列かどうかしか検証しない)から入る
+ * 信頼できない境界のデータなので、壊れたレコード1件で集計全体が落ちないよう
+ * 例外を投げず読み飛ばす。js/workout.js の weeklyVolume が不正な日付の記録を
+ * 除外して継続するのと同じ設計判断。
+ */
 export function dayTotals(meals, dateStr) {
   const totals = { kcal: 0, protein: 0, alcoholMl: 0 };
   for (const meal of meals) {
+    if (!meal || typeof meal.datetime !== 'string') continue;
     if (!meal.datetime.startsWith(dateStr)) continue;
-    for (const item of meal.items ?? []) {
-      totals.kcal += item.kcal ?? 0;
-      totals.protein += item.protein ?? 0;
-      totals.alcoholMl += item.alcoholMl ?? 0;
+    if (!Array.isArray(meal.items)) continue;
+    for (const item of meal.items) {
+      if (!item) continue;
+      totals.kcal += toNum(item.kcal);
+      totals.protein += toNum(item.protein);
+      totals.alcoholMl += toNum(item.alcoholMl);
     }
   }
   return totals;
@@ -1280,36 +1322,56 @@ export function dayTotals(meals, dateStr) {
 /**
  * 達成率と警告を返す。
  * 設計方針: 上限超過より「下限割れ」を重く扱う。摂取を削るほど目的から遠ざかるため。
+ * kcal:0(まだ何も記録していない日)は「食べなさすぎ」danger警告の対象にしない。
+ * 朝いちばんの空腹状態を毎回 danger 扱いすると、この警告自体が無視される
+ * ようになり、1,000kcal台への逆戻りを止めるという本来の目的を果たせなくなる。
+ *
+ * totals は dayTotals を経由しない呼び出しにも備え、dayTotals と同じ toNum で
+ * 防御的に丸める(achievement は単体でもエクスポートされているため)。
+ * targets の分母(protein / kcalMin)が0または非有限の場合、割り算が
+ * Infinity/NaN になり JSON.stringify で null に化ける(store.js で潰したのと
+ * 同じ失敗モード)。ここではバーが伸びないだけで済むよう達成率を0%として扱う。
  */
 export function achievement(totals, targets) {
+  const kcal = toNum(totals?.kcal);
+  const protein = toNum(totals?.protein);
+  const alcoholMl = toNum(totals?.alcoholMl);
+
   const warnings = [];
 
-  if (totals.kcal > 0 && totals.kcal < targets.kcalFloor) {
+  if (kcal > 0 && kcal < targets.kcalFloor) {
     warnings.push({
       type: 'kcalFloor',
       level: 'danger',
-      message: `${Math.round(totals.kcal)}kcal は少なすぎます。この水準が続くと筋肉が分解されて目的と逆方向に進みます`
+      message: `${Math.round(kcal)}kcal は少なすぎます。この水準が続くと筋肉が分解されて目的と逆方向に進みます`
     });
-  } else if (totals.kcal > targets.kcalMax) {
+  } else if (kcal > targets.kcalMax) {
     warnings.push({
       type: 'kcalOver',
       level: 'info',
-      message: `目標を${Math.round(totals.kcal - targets.kcalMax)}kcal超えています`
+      message: `目標を${Math.round(kcal - targets.kcalMax)}kcal超えています`
     });
   }
 
-  if (totals.protein > 0 && totals.protein < targets.protein) {
+  if (protein > 0 && protein < targets.protein) {
     warnings.push({
       type: 'proteinShort',
       level: 'warn',
-      message: `タンパク質があと${Math.round(targets.protein - totals.protein)}g足りません`
+      message: `タンパク質があと${Math.round(targets.protein - protein)}g足りません`
     });
   }
 
+  const proteinTarget = targets.protein;
+  const kcalMinTarget = targets.kcalMin;
+
   return {
-    proteinPct: Math.round((totals.protein / targets.protein) * 100),
-    kcalPct: Math.round((totals.kcal / targets.kcalMax) * 100),
-    alcoholOver: totals.alcoholMl > targets.alcoholMl,
+    proteinPct: Number.isFinite(proteinTarget) && proteinTarget > 0
+      ? Math.round((protein / proteinTarget) * 100)
+      : 0,
+    kcalPct: Number.isFinite(kcalMinTarget) && kcalMinTarget > 0
+      ? Math.min(100, Math.round((kcal / kcalMinTarget) * 100))
+      : 0,
+    alcoholOver: alcoholMl > targets.alcoholMl,
     warnings
   };
 }
@@ -1347,7 +1409,7 @@ export function bumpFoodUse(foods, foodId) {
 - [ ] **Step 5: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（累計65件）
+Expected: PASS（累計68件）
 
 - [ ] **Step 6: Commit**
 
@@ -1476,7 +1538,7 @@ export function radarData(xpMap) {
 - [ ] **Step 4: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（累計71件）
+Expected: PASS（累計74件）
 
 - [ ] **Step 5: Commit**
 
@@ -1654,7 +1716,7 @@ export function initialPhaseStatus(workouts, meals, todayStr) {
 - [ ] **Step 4: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（累計78件）
+Expected: PASS（累計81件）
 
 - [ ] **Step 5: Commit**
 
@@ -1785,7 +1847,7 @@ export function checkBadges(state) {
 - [ ] **Step 4: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（累計84件）
+Expected: PASS（累計87件）
 
 - [ ] **Step 5: Commit**
 
@@ -1896,7 +1958,7 @@ export function bodySeries(body) {
 - [ ] **Step 4: テストを実行して成功を確認**
 
 Run: `npm test`
-Expected: PASS（累計90件）
+Expected: PASS（累計93件）
 
 - [ ] **Step 5: Commit**
 
@@ -2200,9 +2262,11 @@ export function renderStatusBar() {
   setBar('#proteinFill', '#proteinValue', a.proteinPct,
     `${Math.round(totals.protein)} / ${targets.protein}g`,
     totals.protein >= targets.protein ? 'done' : '');
+  // 達成率は下限(kcalMin)基準・100%頭打ち。表示も範囲で出す。
+  // 「/1800」だと1800が目標に見え、このユーザーが最も避けたい「もっと減らそう」方向に効く
   setBar('#kcalFill', '#kcalValue', a.kcalPct,
-    `${Math.round(totals.kcal)} / ${targets.kcalMax}`,
-    totals.kcal > targets.kcalMax ? 'over' : '');
+    `${Math.round(totals.kcal)} / ${targets.kcalMin}〜${targets.kcalMax}`,
+    totals.kcal > targets.kcalMax ? 'over' : (totals.kcal >= targets.kcalMin ? 'done' : ''));
   setBar('#alcoholFill', '#alcoholValue',
     (totals.alcoholMl / targets.alcoholMl) * 100,
     `${totals.alcoholMl} / ${targets.alcoholMl}ml`,
@@ -4210,7 +4274,7 @@ python -m http.server 8080    # ローカル確認
 - [ ] **Step 3: 全テストを流して確認**
 
 Run: `npm test`
-Expected: PASS（累計90件）、失敗0件
+Expected: PASS（累計93件）、失敗0件
 
 - [ ] **Step 4: Commit**
 

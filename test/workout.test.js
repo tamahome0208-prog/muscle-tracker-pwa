@@ -95,6 +95,7 @@ test('PBでなければ updateBests は同じ内容を返す', () => {
   const bests = { seated_row: { weight: 30, reps: 10, date: '2026-07-20' } };
   const next = updateBests(bests, 'seated_row', 27.5, 8, '2026-07-29');
   assert.deepEqual(next.seated_row, bests.seated_row);
+  assert.notEqual(next, bests); // 内容は同じでも新しいオブジェクトを返す
 });
 
 test('脚の日（C）の翌日にバドミントンを入れると警告する', () => {

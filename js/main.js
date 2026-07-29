@@ -4,6 +4,8 @@ import { initMealTab } from './mealTab.js';
 import { initWorkoutTab } from './workoutTab.js';
 import { initPhotoTab, stopCamera } from './photoTab.js';
 import { initRecordTab } from './recordTab.js';
+import { initHomeTab } from './homeTab.js';
+import { initSettingsTab } from './settingsTab.js';
 
 export const store = createStore();
 
@@ -30,6 +32,8 @@ async function boot() {
   initWorkoutTab(store);
   initPhotoTab(store);
   initRecordTab(store);
+  initHomeTab(store);
+  initSettingsTab(store);
   initTabs();
 
   if ('serviceWorker' in navigator) {

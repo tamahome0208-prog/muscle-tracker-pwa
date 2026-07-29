@@ -2445,6 +2445,14 @@ export function nowStr() {
   const off = d.getTimezoneOffset() * 60000;
   return new Date(d - off).toISOString().slice(0, 16);
 }
+
+/** 衝突しないID。crypto.randomUUID が使えない環境ではカウンタで補う */
+let idCounter = 0;
+export function newId(prefix) {
+  if (globalThis.crypto?.randomUUID) return `${prefix}_${crypto.randomUUID()}`;
+  idCounter += 1;
+  return `${prefix}_${Date.now()}_${idCounter}`;
+}
 ```
 
 - [ ] **Step 4: `js/main.js` で起動処理を書く**
@@ -2509,7 +2517,7 @@ git commit -m "feat: HTMLシェル・スタイル・タブ切替を追加"
 - [ ] **Step 1: `js/mealTab.js` を作る**
 
 ```js
-import { $, onShow, toast, todayStr, nowStr } from './ui.js';
+import { $, onShow, toast, todayStr, nowStr, newId } from './ui.js';
 import { dayTotals, achievement, sortFoodsByUse, bumpFoodUse } from './nutrition.js';
 
 let store;
@@ -2556,15 +2564,19 @@ export function renderStatusBar() {
 export function addFoodById(foodId) {
   const food = store.get('foods').find((f) => f.id === foodId);
   if (!food) return;
-  addItems([{ name: food.name, kcal: food.kcal, protein: food.protein, alcoholMl: food.alcoholMl ?? 0 }], 'tap');
+  // useCount は addItems（=再描画を含む）より先に更新する。
+  // 先に addItems を呼んでしまうと、押した食品が上位に来るのが次の描画まで
+  // 遅れてしまい、「よく食べるものが1タップで届く位置に来る」という
+  // このタブの存在意義そのものが体感で1回遅れて壊れる。
   store.set('foods', bumpFoodUse(store.get('foods'), foodId));
+  addItems([{ name: food.name, kcal: food.kcal, protein: food.protein, alcoholMl: food.alcoholMl ?? 0 }], 'tap');
   toast(`${food.name} を追加`);
 }
 
 /** 任意の品目群を1回の食事として記録する */
 export function addItems(items, source) {
   const meals = store.get('meals');
-  meals.push({ id: `m${Date.now()}`, datetime: nowStr(), items, source });
+  meals.push({ id: newId('m'), datetime: nowStr(), items, source });
   store.set('meals', meals);
   renderStatusBar();
   renderMealTab();
@@ -2665,10 +2677,13 @@ git commit -m "feat: 食事タブとワンタップ登録を追加"
 - Create: `js/workoutTab.js`
 - Modify: `js/main.js`
 
+**注意:** レコードIDに `Date.now()` を使わないこと。同一ミリ秒で衝突し、削除時に別レコードまで巻き添えで消える。
+`js/ui.js` の `newId(prefix)`（`crypto.randomUUID` ベース）を使う。
+
 - [ ] **Step 1: `js/workoutTab.js` を作る**
 
 ```js
-import { $, onShow, toast, vibrate, todayStr } from './ui.js';
+import { $, onShow, toast, vibrate, todayStr, newId } from './ui.js';
 import { nextProgram, calcVolume, lastSetFor, isPB, updateBests } from './workout.js';
 import { addWorkoutXp, checkBadges, BADGES, calcStreak } from './game.js';
 
@@ -2808,7 +2823,7 @@ function finishSession() {
   const workouts = store.get('workouts');
   const volume = calcVolume(session.sets);
   workouts.push({
-    id: `w${Date.now()}`,
+    id: newId('w'),
     date: session.date,
     program: session.program,
     sets: session.sets,

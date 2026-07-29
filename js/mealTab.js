@@ -1,6 +1,7 @@
 import { $, onShow, toast, todayStr, nowStr, newId } from './ui.js';
 import { dayTotals, achievement, sortFoodsByUse, bumpFoodUse } from './nutrition.js';
 import { isBarcodeSupported, scanJan, lookupJan } from './barcode.js';
+import { analyzeMealPhoto, analyzeReceipt, OcrError } from './ocr.js';
 
 let store;
 
@@ -118,6 +119,17 @@ export function renderMealTab() {
   } else {
     barcodeBtn.addEventListener('click', scanBarcode);
   }
+
+  const hasKey = Boolean(store.get('settings').geminiKey);
+  for (const [id, kind] of [['#btnPhoto', 'meal'], ['#btnReceipt', 'receipt']]) {
+    const btn = $(id);
+    if (!hasKey) {
+      btn.disabled = true;
+      btn.title = '設定タブでGemini APIキーを登録すると使えます';
+    } else {
+      btn.addEventListener('click', () => pickAndAnalyze(kind));
+    }
+  }
 }
 
 function openManualDialog() {
@@ -182,4 +194,72 @@ async function scanBarcode() {
   const food = { id: `jan_${jan}`, jan, name, unit: '個', kcal, protein, useCount: 0 };
   store.set('foods', [...store.get('foods'), food]);
   addFoodById(food.id);
+}
+
+/** 写真をGeminiに送って品目を推定し、必ず確認画面を挟んでから保存する */
+async function pickAndAnalyze(kind) {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'image/*';
+  input.capture = 'environment';
+  input.addEventListener('change', async () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    toast('解析中...');
+    const apiKey = store.get('settings').geminiKey;
+    try {
+      const items = kind === 'meal'
+        ? await analyzeMealPhoto(file, apiKey)
+        : await analyzeReceipt(file, apiKey);
+      confirmItems(items, kind === 'meal' ? 'photo' : 'receipt');
+    } catch (err) {
+      // 解析に失敗しても記録を落とさない。手入力に必ず落とす
+      toast(err instanceof OcrError ? err.message : '解析に失敗しました');
+      openManualDialog();
+    }
+  });
+  input.click();
+}
+
+/** AIの推定値をそのまま保存せず、チェックと修正を挟む */
+function confirmItems(items, source) {
+  const dialog = document.createElement('div');
+  dialog.className = 'card';
+  dialog.innerHTML = `
+    <h2 style="margin-top:0">確認して保存</h2>
+    <p class="muted">推定値です。違っていれば数値を直してから保存してください。</p>
+    ${items.map((i, idx) => `
+      <div class="ex">
+        <label><input type="checkbox" data-pick="${idx}" checked> ${i.name}</label>
+        <div class="ex-ctrl">
+          <input type="number" data-kcal="${idx}" value="${i.kcal}" style="width:80px"> kcal
+          <input type="number" data-protein="${idx}" value="${i.protein}" style="width:70px"> g
+        </div>
+      </div>`).join('')}
+    <div class="chips">
+      <button id="btnOcrSave" class="primary">保存</button>
+      <button id="btnOcrCancel">やめる</button>
+    </div>`;
+  $('#tab-meal').prepend(dialog);
+
+  dialog.querySelector('#btnOcrCancel').addEventListener('click', () => dialog.remove());
+  dialog.querySelector('#btnOcrSave').addEventListener('click', () => {
+    const picked = items
+      .map((i, idx) => ({
+        ...i,
+        kcal: Number(dialog.querySelector(`[data-kcal="${idx}"]`).value) || 0,
+        protein: Number(dialog.querySelector(`[data-protein="${idx}"]`).value) || 0,
+        checked: dialog.querySelector(`[data-pick="${idx}"]`).checked
+      }))
+      .filter((i) => i.checked)
+      .map(({ checked, ...rest }) => rest);
+
+    if (picked.length === 0) {
+      toast('品目が選ばれていません');
+      return;
+    }
+    dialog.remove();
+    // 画像そのものは保存しない。抽出結果のテキストだけを残す
+    addItems(picked, source);
+  });
 }

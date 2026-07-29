@@ -47,3 +47,11 @@ export function nowStr() {
   const off = d.getTimezoneOffset() * 60000;
   return new Date(d - off).toISOString().slice(0, 16);
 }
+
+/** 衝突しないID。crypto.randomUUID が使えない環境ではカウンタで補う */
+let idCounter = 0;
+export function newId(prefix) {
+  if (globalThis.crypto?.randomUUID) return `${prefix}_${crypto.randomUUID()}`;
+  idCounter += 1;
+  return `${prefix}_${Date.now()}_${idCounter}`;
+}

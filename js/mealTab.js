@@ -1,4 +1,4 @@
-import { $, onShow, toast, todayStr, nowStr } from './ui.js';
+import { $, onShow, toast, todayStr, nowStr, newId } from './ui.js';
 import { dayTotals, achievement, sortFoodsByUse, bumpFoodUse } from './nutrition.js';
 
 let store;
@@ -45,15 +45,19 @@ export function renderStatusBar() {
 export function addFoodById(foodId) {
   const food = store.get('foods').find((f) => f.id === foodId);
   if (!food) return;
-  addItems([{ name: food.name, kcal: food.kcal, protein: food.protein, alcoholMl: food.alcoholMl ?? 0 }], 'tap');
+  // useCount は addItems（=再描画を含む）より先に更新する。
+  // 先に addItems を呼んでしまうと、押した食品が上位に来るのが次の描画まで
+  // 遅れてしまい、「よく食べるものが1タップで届く位置に来る」という
+  // このタブの存在意義そのものが体感で1回遅れて壊れる。
   store.set('foods', bumpFoodUse(store.get('foods'), foodId));
+  addItems([{ name: food.name, kcal: food.kcal, protein: food.protein, alcoholMl: food.alcoholMl ?? 0 }], 'tap');
   toast(`${food.name} を追加`);
 }
 
 /** 任意の品目群を1回の食事として記録する */
 export function addItems(items, source) {
   const meals = store.get('meals');
-  meals.push({ id: `m${Date.now()}`, datetime: nowStr(), items, source });
+  meals.push({ id: newId('m'), datetime: nowStr(), items, source });
   store.set('meals', meals);
   renderStatusBar();
   renderMealTab();

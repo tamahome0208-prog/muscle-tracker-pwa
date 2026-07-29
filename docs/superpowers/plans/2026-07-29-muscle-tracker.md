@@ -3488,7 +3488,11 @@ git commit -m "feat: バーコード読み取りとOpen Food Facts照会を追�
 - Create: `js/ocr.js`
 - Modify: `js/mealTab.js`
 
-**重要:** `ocr.js` に渡してよいのは食事写真とレシートのみ。体の写真は `photos.js` の管轄で、このモジュールを経由しない。
+**重要1:** `ocr.js` に渡してよいのは食事写真とレシートのみ。体の写真は `photos.js` の管轄で、このモジュールを経由しない。
+
+**重要2:** 外部API由来の文字列（品名など）を `innerHTML` に埋めるときは必ず `js/ui.js` の `esc()` を通すこと。
+このアプリは localStorage に体重・体組成・食事・トレ記録を保持し、同一オリジンで `fetch` も使えるため、
+スクリプトが実行されると読み出しと外部送信まで到達しうる。
 
 - [ ] **Step 1: `js/ocr.js` を作る**
 

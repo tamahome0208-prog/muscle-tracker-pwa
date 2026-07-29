@@ -29,6 +29,19 @@ export function weekKey(dateStr) {
   return `${year}-W${String(week).padStart(2, '0')}`;
 }
 
+/**
+ * 週キーの1つ前の週キーを返す。年またぎは weekKey に計算させる。
+ * weeklyVolume の系列は疎なので、消費側は「直前の要素＝先週」と決めつけず
+ * この関数で隣接を確かめてから「先週比」と表示すること。
+ */
+export function previousWeekKey(week) {
+  const [year, num] = String(week).split('-W').map(Number);
+  const jan4 = Date.UTC(year, 0, 4);
+  const monday = new Date(jan4);
+  monday.setUTCDate(monday.getUTCDate() - ((new Date(jan4).getUTCDay() + 6) % 7) + (num - 2) * 7);
+  return weekKey(monday.toISOString().slice(0, 10));
+}
+
 function sortedByDate(workouts) {
   return [...workouts].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
 }

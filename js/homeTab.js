@@ -1,5 +1,5 @@
 import { $, onShow, showTab, toast, todayStr, esc } from './ui.js';
-import { nextProgram, weeklyVolume, warnsBadmintonAfterLegs, weekKey } from './workout.js';
+import { nextProgram, weeklyVolume, warnsBadmintonAfterLegs, weekKey, previousWeekKey } from './workout.js';
 import { calcStreak, isInitialPhase, initialPhaseStatus, levelFromXp, PART_LABELS, PARTS } from './game.js';
 import { sortFoodsByUse } from './nutrition.js';
 import { addFoodById } from './mealTab.js';
@@ -92,13 +92,6 @@ function weekDiff(weeks) {
 }
 
 // 週キーの1つ前の週キーを返す。年またぎは weekKey に計算させる（js/recordTab.js と同じ実装）
-function previousWeekKey(week) {
-  const [year, num] = week.split('-W').map(Number);
-  const jan4 = Date.UTC(year, 0, 4);
-  const monday = new Date(jan4);
-  monday.setUTCDate(monday.getUTCDate() - ((new Date(jan4).getUTCDay() + 6) % 7) + (num - 2) * 7);
-  return weekKey(monday.toISOString().slice(0, 10));
-}
 
 /** 脚の日の翌日は回復が間に合わないため警告を出す */
 function recordBadminton() {

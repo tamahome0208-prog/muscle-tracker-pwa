@@ -1,5 +1,5 @@
 import { $, onShow, todayStr } from './ui.js';
-import { weeklyVolume, weekKey } from './workout.js';
+import { weeklyVolume, weekKey, previousWeekKey } from './workout.js';
 import { bodySeries, bodyDiff, latestBody } from './body.js';
 import { radarData, BADGES } from './game.js';
 import { drawVolumeChart, drawBodyChart, drawRadarChart } from './charts.js';
@@ -72,14 +72,6 @@ function weekSummary(weeks) {
   return `先週比 ${diff >= 0 ? '+' : ''}${diff}kg`;
 }
 
-/** 週キーの1つ前の週キーを返す。年またぎは weekKey に計算させる */
-function previousWeekKey(week) {
-  const [year, num] = week.split('-W').map(Number);
-  const jan4 = Date.UTC(year, 0, 4);
-  const monday = new Date(jan4);
-  monday.setUTCDate(monday.getUTCDate() - ((new Date(jan4).getUTCDay() + 6) % 7) + (num - 2) * 7);
-  return weekKey(monday.toISOString().slice(0, 10));
-}
 
 /** 直近8週間のカレンダー。💪ジム 🏸バド 😴休養 */
 function renderCalendar(workouts, badminton) {

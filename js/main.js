@@ -3,6 +3,7 @@ import { initTabs, todayStr } from './ui.js';
 import { initMealTab } from './mealTab.js';
 import { initWorkoutTab } from './workoutTab.js';
 import { initPhotoTab, stopCamera } from './photoTab.js';
+import { initRecordTab } from './recordTab.js';
 
 export const store = createStore();
 
@@ -28,6 +29,7 @@ async function boot() {
   initMealTab(store);
   initWorkoutTab(store);
   initPhotoTab(store);
+  initRecordTab(store);
   initTabs();
 
   if ('serviceWorker' in navigator) {

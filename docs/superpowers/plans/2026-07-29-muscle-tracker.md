@@ -2677,8 +2677,13 @@ git commit -m "feat: 食事タブとワンタップ登録を追加"
 - Create: `js/workoutTab.js`
 - Modify: `js/main.js`
 
-**注意:** レコードIDに `Date.now()` を使わないこと。同一ミリ秒で衝突し、削除時に別レコードまで巻き添えで消える。
+**注意1:** レコードIDに `Date.now()` を使わないこと。同一ミリ秒で衝突し、削除時に別レコードまで巻き添えで消える。
 `js/ui.js` の `newId(prefix)`（`crypto.randomUUID` ベース）を使う。
+
+**注意2:** ✓の完了状態を DOM に持たせないこと。`renderExercise` は毎回 `session.sets` から
+`doneCount` を導出して描画する。DOM に持たせると、セッション中にタブを移動して戻ったときに
+完了表示が消え、同じセットを二重記録できてしまう（ジムではセット間のタブ移動は普通に起きる）。
+表示する重量・回数も、今回のセッションで記録済みならその最後の値を優先する。
 
 - [ ] **Step 1: `js/workoutTab.js` を作る**
 
@@ -2729,8 +2734,16 @@ export function renderWorkoutTab() {
 
 function renderExercise(ex, workouts, bests) {
   const last = lastSetFor(workouts, ex.id);
-  const weight = last?.weight ?? ex.defaultWeight;
-  const reps = last?.reps ?? ex.defaultReps;
+  // 今回のセッションで既に記録済みのセット（タブ移動しても .done を DOM ではなく
+  // session.sets から導出するための元データ）。
+  const mySets = session.sets.filter((s) => s.exId === ex.id);
+  const doneCount = mySets.length;
+  const latestThisSession = mySets[mySets.length - 1];
+  // 今回既に1セットでも記録していれば、表示する重量・回数は前回セッションの値ではなく
+  // 「今回実際に記録した最後の値」にする。そうしないとタブ往復のたびに前回値へ巻き戻り、
+  // 次のセットが意図と違う重量で記録されてしまう。
+  const weight = latestThisSession?.weight ?? last?.weight ?? ex.defaultWeight;
+  const reps = latestThisSession?.reps ?? last?.reps ?? ex.defaultReps;
   const best = bests[ex.id];
   const hint = best ? `⚡ ${best.weight}kg×${best.reps}を超えると自己ベスト` : '';
 
@@ -2750,7 +2763,7 @@ function renderExercise(ex, workouts, bests) {
         <button data-act="r+">＋</button>
       </div>
       <div class="ex-ctrl">
-        ${Array.from({ length: ex.sets }, (_, i) => `<button class="setbtn" data-act="set" data-index="${i}">✓</button>`).join('')}
+        ${Array.from({ length: ex.sets }, (_, i) => `<button class="setbtn${i < doneCount ? ' done' : ''}" data-act="set" data-index="${i}">✓</button>`).join('')}
       </div>
     </div>`;
 }

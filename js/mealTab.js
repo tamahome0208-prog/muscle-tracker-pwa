@@ -1,4 +1,4 @@
-import { $, onShow, toast, todayStr, nowStr, newId } from './ui.js';
+import { $, onShow, toast, todayStr, nowStr, newId, esc } from './ui.js';
 import { dayTotals, achievement, sortFoodsByUse, bumpFoodUse } from './nutrition.js';
 import { isBarcodeSupported, scanJan, lookupJan } from './barcode.js';
 import { analyzeMealPhoto, analyzeReceipt, OcrError } from './ocr.js';
@@ -74,7 +74,7 @@ export function renderMealTab() {
     <div class="card">
       <h2 style="margin-top:0">ワンタップ登録</h2>
       <div class="chips" id="foodChips">
-        ${foods.map((f) => `<button data-food="${f.id}">${f.name}<br><span class="muted">${f.kcal}kcal / P${f.protein}g</span></button>`).join('')}
+        ${foods.map((f) => `<button data-food="${f.id}">${esc(f.name)}<br><span class="muted">${f.kcal}kcal / P${f.protein}g</span></button>`).join('')}
       </div>
       <div class="chips" style="margin-top:8px">
         <button id="btnBarcode">📷 バーコード</button>
@@ -92,7 +92,7 @@ export function renderMealTab() {
             <span>${m.datetime.slice(11)}</span>
             <button data-del="${m.id}">削除</button>
           </div>
-          ${m.items.map((i) => `<div class="muted">${i.name} — ${i.kcal}kcal / P${i.protein}g</div>`).join('')}
+          ${m.items.map((i) => `<div class="muted">${esc(i.name)} — ${i.kcal}kcal / P${i.protein}g</div>`).join('')}
         </div>`).join('')}
     </div>`;
 
@@ -230,10 +230,11 @@ function confirmItems(items, source) {
     <p class="muted">推定値です。違っていれば数値を直してから保存してください。</p>
     ${items.map((i, idx) => `
       <div class="ex">
-        <label><input type="checkbox" data-pick="${idx}" checked> ${i.name}</label>
+        <label><input type="checkbox" data-pick="${idx}" checked> ${esc(i.name)}</label>
         <div class="ex-ctrl">
           <input type="number" data-kcal="${idx}" value="${i.kcal}" style="width:80px"> kcal
           <input type="number" data-protein="${idx}" value="${i.protein}" style="width:70px"> g
+          ${Number(i.alcoholMl) > 0 ? `<input type="number" data-alcohol="${idx}" value="${i.alcoholMl}" style="width:70px"> mL` : ''}
         </div>
       </div>`).join('')}
     <div class="chips">
@@ -245,12 +246,16 @@ function confirmItems(items, source) {
   dialog.querySelector('#btnOcrCancel').addEventListener('click', () => dialog.remove());
   dialog.querySelector('#btnOcrSave').addEventListener('click', () => {
     const picked = items
-      .map((i, idx) => ({
-        ...i,
-        kcal: Number(dialog.querySelector(`[data-kcal="${idx}"]`).value) || 0,
-        protein: Number(dialog.querySelector(`[data-protein="${idx}"]`).value) || 0,
-        checked: dialog.querySelector(`[data-pick="${idx}"]`).checked
-      }))
+      .map((i, idx) => {
+        const alcoholInput = dialog.querySelector(`[data-alcohol="${idx}"]`);
+        return {
+          ...i,
+          kcal: Number(dialog.querySelector(`[data-kcal="${idx}"]`).value) || 0,
+          protein: Number(dialog.querySelector(`[data-protein="${idx}"]`).value) || 0,
+          alcoholMl: alcoholInput ? Number(alcoholInput.value) || 0 : (Number(i.alcoholMl) || 0),
+          checked: dialog.querySelector(`[data-pick="${idx}"]`).checked
+        };
+      })
       .filter((i) => i.checked)
       .map(({ checked, ...rest }) => rest);
 

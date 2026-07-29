@@ -1,5 +1,11 @@
 export const $ = (sel) => document.querySelector(sel);
 
+/** innerHTML に文字列を埋める際のエスケープ。外部由来の文字列は必ず通すこと */
+export function esc(text) {
+  return String(text ?? '').replace(/[&<>"']/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
 const TABS = ['home', 'workout', 'meal', 'photo', 'record', 'settings'];
 const listeners = {};
 

@@ -44,8 +44,16 @@ export function renderWorkoutTab() {
 
 function renderExercise(ex, workouts, bests) {
   const last = lastSetFor(workouts, ex.id);
-  const weight = last?.weight ?? ex.defaultWeight;
-  const reps = last?.reps ?? ex.defaultReps;
+  // 今回のセッションで既に記録済みのセット（タブ移動しても .done を DOM ではなく
+  // session.sets から導出するための元データ）。
+  const mySets = session.sets.filter((s) => s.exId === ex.id);
+  const doneCount = mySets.length;
+  const latestThisSession = mySets[mySets.length - 1];
+  // 今回既に1セットでも記録していれば、表示する重量・回数は前回セッションの値ではなく
+  // 「今回実際に記録した最後の値」にする。そうしないとタブ往復のたびに前回値へ巻き戻り、
+  // 次のセットが意図と違う重量で記録されてしまう。
+  const weight = latestThisSession?.weight ?? last?.weight ?? ex.defaultWeight;
+  const reps = latestThisSession?.reps ?? last?.reps ?? ex.defaultReps;
   const best = bests[ex.id];
   const hint = best ? `⚡ ${best.weight}kg×${best.reps}を超えると自己ベスト` : '';
 
@@ -65,7 +73,7 @@ function renderExercise(ex, workouts, bests) {
         <button data-act="r+">＋</button>
       </div>
       <div class="ex-ctrl">
-        ${Array.from({ length: ex.sets }, (_, i) => `<button class="setbtn" data-act="set" data-index="${i}">✓</button>`).join('')}
+        ${Array.from({ length: ex.sets }, (_, i) => `<button class="setbtn${i < doneCount ? ' done' : ''}" data-act="set" data-index="${i}">✓</button>`).join('')}
       </div>
     </div>`;
 }

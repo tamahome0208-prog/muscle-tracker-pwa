@@ -1,0 +1,9 @@
+[
+  { "id": "protein_shake", "name": "プロテイン 1杯", "unit": "杯",  "kcal": 120, "protein": 24, "useCount": 10 },
+  { "id": "boiled_egg",    "name": "ゆで卵",         "unit": "個",  "kcal": 76,  "protein": 6,  "useCount": 8 },
+  { "id": "salad_chicken", "name": "サラダチキン",   "unit": "個",  "kcal": 114, "protein": 25, "useCount": 7 },
+  { "id": "onigiri",       "name": "おにぎり",       "unit": "個",  "kcal": 180, "protein": 3,  "useCount": 6 },
+  { "id": "happoshu_500",  "name": "発泡酒 500ml",   "unit": "本",  "kcal": 150, "protein": 0, "alcoholMl": 500, "useCount": 9 },
+  { "id": "karaage",       "name": "唐揚げ",         "unit": "人前","kcal": 600, "protein": 35, "useCount": 5 },
+  { "id": "rice_150",      "name": "ごはん 150g",    "unit": "杯",  "kcal": 234, "protein": 4,  "useCount": 5 }
+]

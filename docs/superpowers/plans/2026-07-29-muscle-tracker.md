@@ -3338,17 +3338,47 @@ export async function lookupJan(jan, foods, useOpenFoodFacts) {
     if (!res.ok) return null;
     const data = await res.json();
     if (data.status !== 1 || !data.product) return null;
+
+    // 1食分の数値が両方揃っている場合だけ「1個」として扱う。
+    // 揃っていない場合に100gあたりの数値を1個分として保存すると、
+    // カロリー(死守2項目の一方)が静かにずれるため、その場合は
+    // 100gあたりの数値と分かるよう unit と名前の両方に明記する。
     const n = data.product.nutriments ?? {};
-    const kcal = n['energy-kcal_serving'] ?? n['energy-kcal_100g'];
-    const protein = n.proteins_serving ?? n.proteins_100g;
-    if (kcal === undefined || protein === undefined) return null;
+    const kcalServing = n['energy-kcal_serving'];
+    const proteinServing = n.proteins_serving;
+    const kcal100 = n['energy-kcal_100g'];
+    const protein100 = n.proteins_100g;
+
+    let kcal, protein, unit;
+    if (kcalServing !== undefined && proteinServing !== undefined) {
+      kcal = kcalServing;
+      protein = proteinServing;
+      unit = '個';
+    } else if (kcal100 !== undefined && protein100 !== undefined) {
+      kcal = kcal100;
+      protein = protein100;
+      unit = '100g';
+    } else {
+      return null;
+    }
+
+    // OFF に品名が無い商品を「商品 <JAN>」のまま登録すると、ワンタップ一覧に
+    // 判読できないボタンが並んでしまい、このタブの存在意義(よく食べるものが
+    // 1タップで届く)を損なう。栄養値はOFFのものをそのまま使い、名前だけその場で尋ねる。
+    let name = data.product.product_name_ja || data.product.product_name || '';
+    if (!name) {
+      name = prompt(`品名を取得できませんでした（JAN: ${jan}）\n品名を入力してください`);
+      if (!name) return null;
+    }
+    if (unit === '100g') name = `${name}（100gあたり）`;
+
     return {
       source: 'openfoodfacts',
       food: {
         id: `jan_${jan}`,
         jan,
-        name: data.product.product_name_ja || data.product.product_name || `商品 ${jan}`,
-        unit: '個',
+        name,
+        unit,
         kcal: Math.round(kcal),
         protein: Math.round(protein * 10) / 10,
         useCount: 0

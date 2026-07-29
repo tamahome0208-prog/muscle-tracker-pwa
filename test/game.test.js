@@ -56,3 +56,11 @@ test('レーダー用データは6部位すべてのレベルを返す', () => {
   assert.equal(data.find((d) => d.part === 'back').level, 3);
   assert.equal(data.find((d) => d.part === 'chest').label, '胸');
 });
+
+test('xpMap に無い部位もレベル0で必ず含める（弱点部位が消えない）', () => {
+  const data = radarData({ back: 400 });
+  assert.equal(data.length, 6);
+  assert.deepEqual(data.map((d) => d.part), ['chest', 'back', 'shoulder', 'leg', 'arm', 'abs']);
+  assert.equal(data.find((d) => d.part === 'leg').level, 0);
+  assert.equal(data.find((d) => d.part === 'leg').xp, 0);
+});

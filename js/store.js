@@ -1,3 +1,15 @@
+// このモジュールの契約(store.js を利用する全モジュールが前提としてよいこと):
+//
+// 1. get() が返す値は常にコピーである。呼び出し側がその場で mutate しても、
+//    set() を呼ばない限り永続化(localStorage)にもキャッシュにも反映されない。
+//    例: const w = store.get('workouts'); w.push(x); // ここではまだ何も保存されていない
+//        store.set('workouts', w);                    // この行で初めて保存される
+//
+// 2. 参照の同一性は保証されない。
+//    store.get('workouts')[0] !== store.get('workouts')[0] (呼ぶたびに新しいコピー)。
+//    そのため `===` によるオブジェクト比較や、エンティティそのものをキーにした
+//    Set/Map には依存しないこと。id などのプリミティブ値で同一性を判定すること。
+
 export const SCHEMA_VERSION = 1;
 
 function deepFreeze(value) {
@@ -84,7 +96,7 @@ export function createStore(storage = globalThis.localStorage) {
     if (!(key in DEFAULTS)) throw new Error(`未知のキー: ${key}`);
     if (!cache.has(key)) {
       const { value } = readValidated(key);
-      cache.set(key, value);
+      cache.set(key, clone(value));
     }
     // キャッシュの実体ではなくスナップショットを返す。呼び出し側が set せずに mutate しても
     // キャッシュ/永続化には影響しない(= set し忘れによる「リロードで消えるゴーストデータ」を防ぐ)。
@@ -93,6 +105,10 @@ export function createStore(storage = globalThis.localStorage) {
 
   function set(key, value) {
     if (!(key in DEFAULTS)) throw new Error(`未知のキー: ${key}`);
+    if (!isValidFor(key, value)) {
+      const expected = isArrayKey(key) ? '配列' : 'オブジェクト';
+      throw new Error(`不正な値です(${key}): ${expected} を指定してください`);
+    }
     const normalized = normalize(key, value);
     // 先に永続化し、成功した場合のみキャッシュを更新する。
     // setItem が QuotaExceededError 等で失敗した場合、キャッシュは古いままになり
@@ -161,11 +177,21 @@ export function createStore(storage = globalThis.localStorage) {
       }
     } catch (err) {
       // 途中で setItem が失敗した場合、書き込み済みだった分を元の値に戻してから再スローする。
+      // ロールバック自体の setItem/removeItem も(容量逼迫時などに)失敗しうるため、
+      // 1件ずつ try/catch で囲んで残りの復元を続行し、元の例外(原因)を消さずに再スローする。
+      const failedRollbacks = [];
       for (const key of applied) {
-        const prev = previousRaw.get(key);
-        if (prev === null) storage.removeItem(KEY_PREFIX + key);
-        else storage.setItem(KEY_PREFIX + key, prev);
-        cache.delete(key);
+        try {
+          const prev = previousRaw.get(key);
+          if (prev === null) storage.removeItem(KEY_PREFIX + key);
+          else storage.setItem(KEY_PREFIX + key, prev);
+          cache.delete(key);
+        } catch {
+          failedRollbacks.push(key);
+        }
+      }
+      if (failedRollbacks.length > 0) {
+        err.message += ` (ロールバックにも失敗したキー: ${failedRollbacks.join(', ')})`;
       }
       throw err;
     }

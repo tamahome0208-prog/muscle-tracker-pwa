@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createStore } from '../js/store.js';
+import { createStore, DEFAULTS } from '../js/store.js';
 import { memoryStorage } from './helpers.js';
 
 test('初回はデフォルト値を返す', () => {
@@ -161,6 +161,10 @@ test('importAll 途中で setItem が失敗したら書き込み済みの分も�
   })));
   failOnMeals = false;
 
+  // カウンター経由(store.get)ではなく storage の生JSONを直接見て、
+  // キャッシュ側だけ元に戻っていて storage 側が壊れたまま、という事態を検知できるようにする。
+  assert.equal(JSON.parse(storage.getItem('mt.workouts'))[0].id, 'old-w');
+  assert.equal(JSON.parse(storage.getItem('mt.meals'))[0].id, 'old-m');
   assert.equal(store.get('workouts')[0].id, 'old-w');
   assert.equal(store.get('meals')[0].id, 'old-m');
 });
@@ -184,4 +188,37 @@ test('importAll で geminiKey が空なら端末側の既存キーを維持す�
   store.importAll(JSON.stringify({ settings: { geminiKey: '', useOpenFoodFacts: false, photoReminder: false } }));
   assert.equal(store.get('settings').geminiKey, 'existing-key');
   assert.equal(store.get('settings').useOpenFoodFacts, false);
+});
+
+// --- 再レビュー(N1〜N7)対応の回帰テスト ---
+
+test('set() は型が違う値を拒否し、storage を壊さない', () => {
+  const storage = memoryStorage();
+  const store = createStore(storage);
+  assert.throws(() => store.set('profile', 'garbage'), /不正な値/);
+  assert.throws(() => store.set('workouts', null), /不正な値/);
+  assert.throws(() => store.set('workouts', 42), /不正な値/);
+  assert.throws(() => store.set('profile', undefined), /不正な値/);
+  assert.equal(storage.getItem('mt.profile'), null);
+  assert.equal(storage.getItem('mt.workouts'), null);
+});
+
+test('set() は normalize を通す: 部分的な profile を渡してもデフォルトのネスト項目が補われる', () => {
+  const store = createStore(memoryStorage());
+  store.set('profile', { height: 170 });
+  assert.equal(store.get('profile').targets.kcalFloor, 1500);
+  assert.equal(store.get('profile').height, 170);
+});
+
+test('DEFAULTS は deep freeze されており、ネストしたプロパティの書き換えも例外になる', () => {
+  assert.throws(() => { DEFAULTS.profile.height = 1; });
+  assert.throws(() => { DEFAULTS.profile.targets.protein = 1; });
+  assert.throws(() => { DEFAULTS.workouts.push({}); });
+});
+
+test('validate() は mt. 以外のキーには一切触らない', () => {
+  const storage = memoryStorage({ 'other-app.settings': 'untouched-value' });
+  const store = createStore(storage);
+  store.validate();
+  assert.equal(storage.getItem('other-app.settings'), 'untouched-value');
 });

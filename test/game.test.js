@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PARTS, levelFromXp, addWorkoutXp, radarData } from '../js/game.js';
 import { calcStreak, isInitialPhase, initialPhaseStatus } from '../js/game.js';
+import { BADGES, checkBadges } from '../js/game.js';
 
 const EXERCISES = [
   { id: 'lat_pulldown', part: 'back' },
@@ -151,4 +152,59 @@ test('先週の朝プロテインは今週に数えない', () => {
 test('先週のジムの記録は今週のgymCountに混ざらない', () => {
   const workouts = [...gymWeek('2026-07-20', 3), ...gymWeek('2026-07-27', 1)];
   assert.equal(initialPhaseStatus(workouts, [], '2026-07-29').gymCount, 1);
+});
+
+test('称号は id・name・説明を持つ', () => {
+  for (const b of BADGES) {
+    assert.ok(b.id && b.name && b.desc);
+  }
+});
+
+test('初回トレーニングで「初心者ボーナス期」を獲得する', () => {
+  const earned = checkBadges({
+    workouts: [{ date: '2026-07-29', program: 'A', volume: 1000 }],
+    body: [], streak: 0, xp: { chest: 0, back: 0, shoulder: 0, leg: 0, arm: 0, abs: 0 },
+    comparedPhotos: false, badges: []
+  });
+  assert.ok(earned.includes('first_workout'));
+});
+
+test('すでに持っている称号は再度返さない', () => {
+  const earned = checkBadges({
+    workouts: [{ date: '2026-07-29', program: 'A', volume: 1000 }],
+    body: [], streak: 0, xp: { chest: 0, back: 0, shoulder: 0, leg: 0, arm: 0, abs: 0 },
+    comparedPhotos: false, badges: ['first_workout']
+  });
+  assert.ok(!earned.includes('first_workout'));
+});
+
+test('4週連続で「習慣化」を獲得する', () => {
+  const earned = checkBadges({
+    workouts: [], body: [], streak: 4,
+    xp: { chest: 0, back: 0, shoulder: 0, leg: 0, arm: 0, abs: 0 },
+    comparedPhotos: false, badges: []
+  });
+  assert.ok(earned.includes('habit_4w'));
+});
+
+test('体脂肪率が3%下がると「腹筋上部が割れた」を獲得する', () => {
+  const earned = checkBadges({
+    workouts: [], streak: 0,
+    body: [
+      { date: '2026-04-29', weight: 60, muscle: 45, fatPct: 20 },
+      { date: '2026-07-29', weight: 60, muscle: 47, fatPct: 17 }
+    ],
+    xp: { chest: 0, back: 0, shoulder: 0, leg: 0, arm: 0, abs: 0 },
+    comparedPhotos: false, badges: []
+  });
+  assert.ok(earned.includes('abs_visible'));
+});
+
+test('比較ビューを開くと「定点観測」を獲得する', () => {
+  const earned = checkBadges({
+    workouts: [], body: [], streak: 0,
+    xp: { chest: 0, back: 0, shoulder: 0, leg: 0, arm: 0, abs: 0 },
+    comparedPhotos: true, badges: []
+  });
+  assert.ok(earned.includes('photo_compare'));
 });

@@ -123,3 +123,59 @@ export function initialPhaseStatus(workouts, meals, todayStr) {
 
   return { gymCount, gymDone: gymCount >= GYM_PER_WEEK, proteinMornings: proteinMornings.size };
 }
+
+/** 称号。到達点は会話で確認した現実的なラインに対応させている */
+export const BADGES = [
+  { id: 'first_workout', name: '初心者ボーナス期', desc: '初めてジムで記録をつけた' },
+  { id: 'habit_4w',      name: '習慣化',           desc: '週3ジムを4週連続で達成した' },
+  { id: 'shoulder_lv3',  name: '肩と胸に丸みが出た', desc: '胸と肩のレベルが3に到達した' },
+  { id: 'abs_visible',   name: '腹筋上部が割れた',   desc: '体脂肪率が開始時から3%下がった' },
+  { id: 'muscle_plus2',  name: '中身が変わった',     desc: '筋肉量が開始時から2kg増えた' },
+  { id: 'photo_compare', name: '定点観測',         desc: '写真の比較ビューを開いた' },
+  { id: 'volume_10t',    name: '10トン挙げた',      desc: '総挙上量の累計が10,000kgを超えた' }
+];
+
+/**
+ * 未獲得のうち、条件を満たした称号IDを返す。
+ * state: { workouts, body, streak, xp, comparedPhotos, badges }
+ *
+ * body / workouts は storage / importAll を経由して届く未検証データのため
+ * （このファイルの他の集計関数と同じ方針で）不正なレコードは無視し、例外は投げない。
+ * fatPct・muscle・volume は toNum で防御的に丸める: NaN や欠損値のまま差分を
+ * 取ると `NaN >= 3` は常に false になるため実害は薄いが、文字列が紛れ込むと
+ * `'20' - '17'` のように意図せず動く/動かないケースがあり、丸めて統一しておく方が安全。
+ * body の日付は文字列比較でソートするため、不正な形式の日付が混ざると並び順が
+ * 保証できない。ここでは date が YYYY-MM-DD 形式のレコードだけを対象にする。
+ * badges は game オブジェクト内のネストしたフィールドであり、store.js の
+ * deepMerge は配列型のトップレベルキー(workouts/body等)しか配列性を検証しない
+ * ため、ネストした badges が不正なJSON編集等で配列以外(文字列・数値等)に
+ * 壊れていてもそのまま届き得る。Array.isArray で確認し、そうでなければ
+ * 「何も所持していない」として扱う（Set(非配列) は例外を投げるため）。
+ */
+export function checkBadges(state) {
+  const owned = new Set(Array.isArray(state.badges) ? state.badges : []);
+  const earned = [];
+  const add = (id, condition) => {
+    if (condition && !owned.has(id)) earned.push(id);
+  };
+
+  add('first_workout', (state.workouts ?? []).length >= 1);
+  add('habit_4w', (state.streak ?? 0) >= 4);
+  add('shoulder_lv3', levelFromXp(state.xp?.chest ?? 0) >= 3 && levelFromXp(state.xp?.shoulder ?? 0) >= 3);
+  add('photo_compare', state.comparedPhotos === true);
+
+  const body = (state.body ?? [])
+    .filter((b) => typeof b?.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(b.date))
+    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  if (body.length >= 2) {
+    const first = body[0];
+    const last = body[body.length - 1];
+    add('abs_visible', toNum(first.fatPct) - toNum(last.fatPct) >= 3);
+    add('muscle_plus2', toNum(last.muscle) - toNum(first.muscle) >= 2);
+  }
+
+  const totalVolume = (state.workouts ?? []).reduce((sum, w) => sum + toNum(w?.volume), 0);
+  add('volume_10t', totalVolume >= 10000);
+
+  return earned;
+}

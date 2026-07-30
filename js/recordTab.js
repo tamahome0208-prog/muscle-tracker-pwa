@@ -3,11 +3,13 @@ import { weeklyVolume, weekKey, previousWeekKey, weekFeasibility } from './worko
 import { bodySeries, bodyDiff, latestBody } from './body.js';
 import { radarData, BADGES } from './game.js';
 import { drawVolumeChart, drawBodyChart, drawRadarChart } from './charts.js';
+import { initDayView, renderDayView } from './dayView.js';
 
 let store;
 
 export function initRecordTab(s) {
   store = s;
+  initDayView(s);
   onShow('record', renderRecordTab);
 }
 
@@ -56,6 +58,18 @@ export function renderRecordTab() {
   drawVolumeChart('volumeChart', weeks);
   drawBodyChart('bodyChart', bodySeries(body));
   drawRadarChart('radarChart', radarData(game.xp));
+
+  // #tab-record は日付ビュー(js/dayView.js)との間で使い回されるコンテナなので、
+  // addEventListener だと record タブに戻ってくるたびにハンドラが積み重なる。
+  // onclick 代入で常に1つに保つ。
+  $('#tab-record').onclick = onRecordTabClick;
+}
+
+/** カレンダーのセルをタップしたら、その日付の記録一覧(js/dayView.js)を開く */
+function onRecordTabClick(e) {
+  const cell = e.target.closest('[data-date]');
+  if (!cell) return;
+  renderDayView(cell.dataset.date, renderRecordTab);
 }
 
 function fmt(n) {
@@ -90,7 +104,10 @@ function renderCalendar(workouts, badminton) {
     d.setUTCDate(d.getUTCDate() - i);
     const key = d.toISOString().slice(0, 10);
     const mark = gymDates.has(key) ? '💪' : badDates.has(key) ? '🏸' : '·';
-    cells.push(`<span title="${key}" style="display:inline-block;width:12.5%;text-align:center;padding:2px 0">${mark}</span>`);
+    // data-date でタップ判定する(title属性はホバー用の補助表示として残す)。
+    // 44px未満だと誤タップ元になるため、幅は12.5%でも縦方向のpaddingで
+    // タップ領域を44px以上確保する。
+    cells.push(`<span title="${key}" data-date="${key}" style="display:inline-block;width:12.5%;text-align:center;padding:12px 0;cursor:pointer">${mark}</span>`);
   }
   return `<div style="font-size:14px">${cells.join('')}</div>`;
 }

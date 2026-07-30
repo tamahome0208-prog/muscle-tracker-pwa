@@ -225,15 +225,17 @@ test('validate() は mt. 以外のキーには一切触らない', () => {
 
 // --- 最終レビュー対応の回帰テスト ---
 
-test('session キーはデフォルトで program/date が null、sets が空配列', () => {
+test('session キーはデフォルトで program/date/startedAt が null、sets が空配列', () => {
   const store = createStore(memoryStorage());
-  assert.deepEqual(store.get('session'), { program: null, date: null, sets: [] });
+  assert.deepEqual(store.get('session'), { program: null, date: null, startedAt: null, sets: [] });
 });
 
-test('session を保存して読み戻せる', () => {
+test('session を保存して読み戻せる(startedAtも含めて)', () => {
   const store = createStore(memoryStorage());
-  store.set('session', { program: 'A', date: '2026-07-29', sets: [{ exId: 'x', weight: 10, reps: 10 }] });
+  store.set('session', { program: 'A', date: '2026-07-28', startedAt: '2026-07-29', sets: [{ exId: 'x', weight: 10, reps: 10 }] });
   assert.equal(store.get('session').program, 'A');
+  assert.equal(store.get('session').date, '2026-07-28');
+  assert.equal(store.get('session').startedAt, '2026-07-29');
   assert.equal(store.get('session').sets.length, 1);
 });
 

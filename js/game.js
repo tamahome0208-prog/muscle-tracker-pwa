@@ -1,4 +1,4 @@
-import { calcVolume, weekKey, distinctDatesPerWeek } from './workout.js';
+import { calcVolume, weekKey, distinctDatesPerWeek, updateBests, isValidDateStr } from './workout.js';
 
 export const PARTS = ['chest', 'back', 'shoulder', 'leg', 'arm', 'abs'];
 
@@ -45,6 +45,52 @@ export function addWorkoutXp(xpMap, workout, exercises, bodyweight) {
     next[part] = toNum(next[part]) + calcVolume([set], context) / 10;
   }
   return next;
+}
+
+/**
+ * workouts の全履歴から xp と bests を丸ごと再構築する純粋関数。
+ *
+ * これまで xp・bests は保存の瞬間に加算されるだけで、削除は一切考慮していなかった。
+ * そのため記録を1件削除しても、そのワークアウトがもたらしたXPや自己ベストは
+ * 永久に残り続けてしまう(例: 入力ミスで260kgと記録し、消しても自己ベストは260kgのまま)。
+ * このバグを直すため、削除のたびに differential に引き算するのではなく、
+ * 残った全履歴から丸ごと再計算する(差分計算は「そのレコードが本当にbestsの
+ * 出処だったか」を別途追跡する必要があり複雑で壊れやすいため、こちらの方が安全)。
+ *
+ * 日付の古い順に処理する: bests は「その時点までの最良」を意味するため、
+ * 新しい順に処理すると同値のPBで date が古い方に上書きされてしまう。
+ * calcVolume/addWorkoutXp/updateBests をそのまま再利用し、算術式を二重管理しない。
+ *
+ * bodyweightForDate: (dateStr) => number。ワークアウトの日付ごとに有効だった体重を
+ * 解決する関数(通常は js/body.js の bodyweightAsOf を束縛したもの)。今日の体重で
+ * 何ヶ月も前のワークアウトを計算すると、体重が変わるたびに過去のXP/bestsまで
+ * 変わってしまうため(js/workout.js の migrateHistoricalVolume と同じ理由)、
+ * 呼び出し側は必ず日付ごとに解決した値を渡すこと。
+ *
+ * 【称号(badges)はここでは一切扱わない】称号は罰ではないので取り消さない設計。
+ * 記録を削除しても、それ以前に確かに達成した事実そのものは消えない。
+ * 呼び出し側はこの関数の戻り値で game.xp / game.bests だけを置き換え、
+ * game.badges はそのまま保持すること。
+ *
+ * workouts は storage / importAll 由来の未検証データの境界なので、date が不正・
+ * sets が配列でない・null要素のレコードは例外を投げずに除外する
+ * （js/workout.js の weeklyVolume 等と同じ方針）。
+ */
+export function recomputeGame(workouts, exercises, bodyweightForDate) {
+  const sorted = (workouts ?? [])
+    .filter((w) => w && isValidDateStr(w.date) && Array.isArray(w.sets))
+    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+
+  let xp = { chest: 0, back: 0, shoulder: 0, leg: 0, arm: 0, abs: 0 };
+  let bests = {};
+  for (const w of sorted) {
+    const bodyweight = bodyweightForDate(w.date);
+    xp = addWorkoutXp(xp, w, exercises, bodyweight);
+    for (const s of w.sets) {
+      bests = updateBests(bests, s.exId, Number(s.weight) || 0, Number(s.reps) || 0, w.date);
+    }
+  }
+  return { xp, bests };
 }
 
 /** レーダーチャート用のデータ */

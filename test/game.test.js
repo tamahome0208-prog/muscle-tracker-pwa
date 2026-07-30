@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PARTS, levelFromXp, addWorkoutXp, radarData } from '../js/game.js';
 import { calcStreak, isInitialPhase, initialPhaseStatus } from '../js/game.js';
-import { BADGES, checkBadges } from '../js/game.js';
+import { BADGES, checkBadges, recomputeGame } from '../js/game.js';
 
 const EXERCISES = [
   { id: 'lat_pulldown', part: 'back' },
@@ -226,6 +226,89 @@ test('initialPhaseStatus: 同じ日に複数記録があってもgymCountは実�
     { date: '2026-07-27', program: 'B' }
   ];
   assert.equal(initialPhaseStatus(workouts, [], '2026-07-29').gymCount, 1);
+});
+
+// --- recomputeGame（削除時のXP/自己ベストのロールバック用の再構築） ---
+
+const EMPTY_XP = { chest: 0, back: 0, shoulder: 0, leg: 0, arm: 0, abs: 0 };
+const flatBodyweight = (bw) => () => bw;
+
+test('recomputeGame: 空履歴からは xp が全0・bests が空オブジェクト', () => {
+  const result = recomputeGame([], EXERCISES, flatBodyweight(60));
+  assert.deepEqual(result.xp, EMPTY_XP);
+  assert.deepEqual(result.bests, {});
+});
+
+test('recomputeGame: 単一のワークアウトから xp と bests を組み立てる', () => {
+  const workouts = [
+    { date: '2026-07-27', program: 'B', sets: [{ exId: 'seated_row', weight: 30, reps: 10 }] }
+  ];
+  const result = recomputeGame(workouts, EXERCISES, flatBodyweight(60));
+  assert.equal(result.xp.back, 30); // 300/10
+  assert.deepEqual(result.bests.seated_row, { weight: 30, reps: 10, date: '2026-07-27' });
+});
+
+test('recomputeGame: 複数ワークアウトで後の記録がPBを更新する', () => {
+  const workouts = [
+    { date: '2026-07-20', program: 'B', sets: [{ exId: 'seated_row', weight: 30, reps: 10 }] },
+    { date: '2026-07-27', program: 'B', sets: [{ exId: 'seated_row', weight: 35, reps: 8 }] } // PB
+  ];
+  const result = recomputeGame(workouts, EXERCISES, flatBodyweight(60));
+  assert.deepEqual(result.bests.seated_row, { weight: 35, reps: 8, date: '2026-07-27' });
+});
+
+test('recomputeGame: PBを出した記録を削除すると bests は次点に戻る(消えたまま残らない)', () => {
+  const withPb = [
+    { date: '2026-07-20', program: 'B', sets: [{ exId: 'seated_row', weight: 30, reps: 10 }] },
+    { date: '2026-07-27', program: 'B', sets: [{ exId: 'seated_row', weight: 35, reps: 8 }] } // PB。260kg誤入力のようなケースを想定
+  ];
+  const before = recomputeGame(withPb, EXERCISES, flatBodyweight(60));
+  assert.deepEqual(before.bests.seated_row, { weight: 35, reps: 8, date: '2026-07-27' });
+
+  // PBを出した記録(2026-07-27)を削除した後の履歴
+  const afterDeletion = withPb.filter((w) => w.date !== '2026-07-27');
+  const after = recomputeGame(afterDeletion, EXERCISES, flatBodyweight(60));
+  assert.deepEqual(after.bests.seated_row, { weight: 30, reps: 10, date: '2026-07-20' });
+});
+
+test('recomputeGame: XPは同じ履歴をaddWorkoutXpで順に積み上げた結果と一致する', () => {
+  const workouts = [
+    { date: '2026-07-13', program: 'B', sets: [{ exId: 'seated_row', weight: 30, reps: 10 }] },
+    { date: '2026-07-20', program: 'A', sets: [{ exId: 'lat_pulldown', weight: 32.5, reps: 8 }] },
+    { date: '2026-07-27', program: 'B', sets: [{ exId: 'biceps_curl', weight: 15, reps: 10 }] }
+  ];
+  let expectedXp = EMPTY_XP;
+  for (const w of workouts) expectedXp = addWorkoutXp(expectedXp, w, EXERCISES, 60);
+
+  const result = recomputeGame(workouts, EXERCISES, flatBodyweight(60));
+  assert.deepEqual(result.xp, expectedXp);
+});
+
+test('recomputeGame: 体重依存種目(assist/bodyweight)は日付ごとの体重で解決する', () => {
+  const bodyweightExercises = [
+    { id: 'chin_assist', part: 'back', load: 'assist' },
+    { id: 'ab_coaster', part: 'abs', load: 'bodyweight' }
+  ];
+  const workouts = [
+    { date: '2026-04-01', program: 'B', sets: [{ exId: 'chin_assist', weight: -40, reps: 8 }] }, // 当時55kg → (55-40)*8=120
+    { date: '2026-07-01', program: 'C', sets: [{ exId: 'ab_coaster', weight: 0, reps: 15 }] }    // 現在60kg → 60*15=900
+  ];
+  const bodyweightForDate = (d) => (d < '2026-06-01' ? 55 : 60);
+  const result = recomputeGame(workouts, bodyweightExercises, bodyweightForDate);
+  assert.equal(result.xp.back, 12);  // 120/10、今の体重(60)ではなく当時(55)基準
+  assert.equal(result.xp.abs, 90);   // 900/10
+});
+
+test('recomputeGame: 壊れたレコード(null・日付不正・sets非配列)は例外を投げずに除外する', () => {
+  const workouts = [
+    null,
+    { date: undefined, program: 'B', sets: [{ exId: 'seated_row', weight: 30, reps: 10 }] },
+    { date: '2026-07-27', program: 'B', sets: 'garbage' },
+    { date: '2026-07-29', program: 'B', sets: [{ exId: 'seated_row', weight: 32.5, reps: 8 }] }
+  ];
+  assert.doesNotThrow(() => recomputeGame(workouts, EXERCISES, flatBodyweight(60)));
+  const result = recomputeGame(workouts, EXERCISES, flatBodyweight(60));
+  assert.deepEqual(result.bests.seated_row, { weight: 32.5, reps: 8, date: '2026-07-29' });
 });
 
 test('称号は id・name・説明を持つ', () => {

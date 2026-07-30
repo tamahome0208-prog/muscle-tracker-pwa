@@ -217,19 +217,24 @@ export function updateBests(bests, exId, weight, reps, date) {
 }
 
 /**
- * 保存されていた進行中セッション(js/store.js の 'session' キー)を、今日の
- * セッションとして復元してよいか判定する。
+ * 保存されていた進行中セッション(js/store.js の 'session' キー)を、今日
+ * 開始されたセッションとして復元してよいか判定する。
  *
- * date が今日と一致しない場合は古いセッションとみなして復元しない(数日前の
- * セッションが今日のexだと勘違いして蘇るのを防ぐ)。program が3種目のいずれ
- * でもない、または sets が配列でない場合も壊れたデータとして復元しない。
+ * 判定は date ではなく startedAt(実際にこのセッションを開始した暦日)で行う。
+ * date は「記録される対象の日付」であり、過去日を選んでバックデート入力を
+ * 始めた場合は today と一致しない(それが本来の使い方)。startedAt が今日と
+ * 一致しない場合だけ古いセッションとみなして復元しない(数日前に開始した
+ * セッションが今日のものだと勘違いして蘇るのを防ぐ、という元の保護は維持する)。
+ * date が(不正な形式も含め)無効、program が3種目のいずれでもない、または
+ * sets が配列でない場合も壊れたデータとして復元しない。
  * 復元しない場合は null を返し、呼び出し側は新規セッションを開始すること。
  */
 export function restorableSession(stored, todayStr) {
-  if (!stored || typeof stored.date !== 'string' || stored.date !== todayStr) return null;
+  if (!stored || typeof stored.startedAt !== 'string' || stored.startedAt !== todayStr) return null;
+  if (!isValidDateStr(stored.date)) return null;
   if (!PROGRAMS.includes(stored.program)) return null;
   if (!Array.isArray(stored.sets)) return null;
-  return { program: stored.program, date: stored.date, sets: stored.sets };
+  return { program: stored.program, date: stored.date, startedAt: stored.startedAt, sets: stored.sets };
 }
 
 /**

@@ -43,9 +43,13 @@ export const DEFAULTS = deepFreeze({
   settings: { geminiKey: '', useOpenFoodFacts: true, photoReminder: true },
   // 進行中（未終了）のトレーニングセッション。Androidがバックグラウンドで
   // ページを破棄しても記録済みのセットを失わないための永続化用の場所。
-  // date が今日でなければ古いセッションとして復元時に破棄する
-  // （js/workout.js の restorableSession を参照）。
-  session: { program: null, date: null, sets: [] }
+  // date は「記録される対象の日付」(過去日の場合もある)、startedAt は
+  // 「実際にこのセッションを開始した暦日」。startedAt が今日でなければ
+  // 古いセッションとして復元時に破棄する（js/workout.js の restorableSession
+  // を参照）。date だけで判定すると、過去日を選んでバックデート入力を始めた
+  // セッションが「date=今日ではない」という理由で誤って古いものとして
+  // 破棄されてしまう。
+  session: { program: null, date: null, startedAt: null, sets: [] }
 });
 
 const KEY_PREFIX = 'mt.';

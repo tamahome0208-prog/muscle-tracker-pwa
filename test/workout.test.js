@@ -320,26 +320,38 @@ test('年をまたぐ脚の日の翌日も警告する', () => {
 });
 
 // --- restorableSession（進行中セッションの永続化/復元） ---
+// startedAt(セッションを開始した暦日)が今日かどうかで判定する。date(記録対象の日付)は
+// バックデート入力では今日と一致しなくてよい。
 
-test('restorableSession: 保存済みセッションの日付が今日なら復元する', () => {
-  const stored = { program: 'B', date: '2026-07-29', sets: [{ exId: 'seated_row', weight: 30, reps: 10 }] };
+test('restorableSession: startedAtが今日なら(dateが過去でも)復元する', () => {
+  const stored = { program: 'B', date: '2026-07-28', startedAt: '2026-07-29', sets: [{ exId: 'seated_row', weight: 30, reps: 10 }] };
   assert.deepEqual(restorableSession(stored, '2026-07-29'), stored);
 });
 
-test('restorableSession: 日付が今日でなければ古いセッションとして復元しない', () => {
-  const stored = { program: 'B', date: '2026-07-27', sets: [{ exId: 'seated_row', weight: 30, reps: 10 }] };
+test('restorableSession: dateが今日でもstartedAtが今日なら復元する(通常の当日セッション)', () => {
+  const stored = { program: 'B', date: '2026-07-29', startedAt: '2026-07-29', sets: [{ exId: 'seated_row', weight: 30, reps: 10 }] };
+  assert.deepEqual(restorableSession(stored, '2026-07-29'), stored);
+});
+
+test('restorableSession: startedAtが今日でなければ古いセッションとして復元しない', () => {
+  const stored = { program: 'B', date: '2026-07-27', startedAt: '2026-07-27', sets: [{ exId: 'seated_row', weight: 30, reps: 10 }] };
   assert.equal(restorableSession(stored, '2026-07-29'), null);
 });
 
-test('restorableSession: セッションが無ければ(program/date が null)復元しない', () => {
-  assert.equal(restorableSession({ program: null, date: null, sets: [] }, '2026-07-29'), null);
+test('restorableSession: セッションが無ければ(program/date/startedAt が null)復元しない', () => {
+  assert.equal(restorableSession({ program: null, date: null, startedAt: null, sets: [] }, '2026-07-29'), null);
   assert.equal(restorableSession(null, '2026-07-29'), null);
   assert.equal(restorableSession(undefined, '2026-07-29'), null);
 });
 
 test('restorableSession: programが不正、またはsetsが配列でなければ復元しない', () => {
-  assert.equal(restorableSession({ program: 'X', date: '2026-07-29', sets: [] }, '2026-07-29'), null);
-  assert.equal(restorableSession({ program: 'A', date: '2026-07-29', sets: 'garbage' }, '2026-07-29'), null);
+  assert.equal(restorableSession({ program: 'X', date: '2026-07-29', startedAt: '2026-07-29', sets: [] }, '2026-07-29'), null);
+  assert.equal(restorableSession({ program: 'A', date: '2026-07-29', startedAt: '2026-07-29', sets: 'garbage' }, '2026-07-29'), null);
+});
+
+test('restorableSession: dateが不正な形式なら(startedAtが今日でも)復元しない', () => {
+  const stored = { program: 'A', date: '2026-7-9', startedAt: '2026-07-29', sets: [] };
+  assert.equal(restorableSession(stored, '2026-07-29'), null);
 });
 
 // --- programStatus（プログラム別チップ用の状態） ---

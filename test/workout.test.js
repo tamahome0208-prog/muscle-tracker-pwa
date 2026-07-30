@@ -9,7 +9,9 @@ import {
   updateBests,
   warnsBadmintonAfterLegs,
   weekKey,
-  restorableSession
+  restorableSession,
+  programStatus,
+  PROGRAMS
 } from '../js/workout.js';
 
 test('記録が無ければ最初はA', () => {
@@ -265,4 +267,79 @@ test('restorableSession: セッションが無ければ(program/date が null)�
 test('restorableSession: programが不正、またはsetsが配列でなければ復元しない', () => {
   assert.equal(restorableSession({ program: 'X', date: '2026-07-29', sets: [] }, '2026-07-29'), null);
   assert.equal(restorableSession({ program: 'A', date: '2026-07-29', sets: 'garbage' }, '2026-07-29'), null);
+});
+
+// --- programStatus（プログラム別チップ用の状態） ---
+
+test('programStatus: 記録が無ければ全プログラム未実施でAが推奨される', () => {
+  const statuses = programStatus([], '2026-07-29');
+  assert.equal(statuses.length, 3);
+  assert.deepEqual(statuses.map((s) => s.program), PROGRAMS);
+  for (const s of statuses) {
+    assert.equal(s.lastDate, null);
+    assert.equal(s.daysAgo, null);
+  }
+  assert.deepEqual(statuses.map((s) => s.recommended), [true, false, false]);
+});
+
+test('programStatus: 各プログラムが別日に実施済みならそれぞれのdaysAgoを返す', () => {
+  const workouts = [
+    { date: '2026-07-26', program: 'A' }, // 3日前
+    { date: '2026-07-24', program: 'B' }, // 5日前
+    { date: '2026-07-19', program: 'C' }  // 10日前
+  ];
+  const statuses = programStatus(workouts, '2026-07-29');
+  const byProgram = Object.fromEntries(statuses.map((s) => [s.program, s]));
+  assert.equal(byProgram.A.daysAgo, 3);
+  assert.equal(byProgram.B.daysAgo, 5);
+  assert.equal(byProgram.C.daysAgo, 10);
+  // 直近はA(2026-07-26)なので次はB
+  assert.equal(nextProgram(workouts), 'B');
+  assert.deepEqual(statuses.filter((s) => s.recommended).map((s) => s.program), ['B']);
+});
+
+test('programStatus: 同一プログラムを複数回実施していれば最新の日付が勝つ', () => {
+  const workouts = [
+    { date: '2026-07-10', program: 'A' },
+    { date: '2026-07-27', program: 'A' } // より新しい
+  ];
+  const statuses = programStatus(workouts, '2026-07-29');
+  const a = statuses.find((s) => s.program === 'A');
+  assert.equal(a.lastDate, '2026-07-27');
+  assert.equal(a.daysAgo, 2);
+});
+
+test('programStatus: dateが欠損・不正な記録は例外を投げずに無視する', () => {
+  const workouts = [
+    { date: undefined, program: 'A' },
+    { date: '2026-7-9', program: 'B' }, // ゼロ埋めなし
+    { date: '2026-07-29', program: 'C' }
+  ];
+  assert.doesNotThrow(() => programStatus(workouts, '2026-07-29'));
+  const statuses = programStatus(workouts, '2026-07-29');
+  const [a, b, c] = statuses;
+  assert.equal(a.lastDate, null);
+  assert.equal(b.lastDate, null);
+  assert.equal(c.lastDate, '2026-07-29');
+});
+
+test('programStatus: recommendedは常にnextProgramと一致する', () => {
+  const cases = [
+    [],
+    [{ date: '2026-07-29', program: 'A' }],
+    [{ date: '2026-07-29', program: 'B' }],
+    [{ date: '2026-07-29', program: 'C' }],
+    [{ date: '2026-07-27', program: 'A' }, { date: '2026-07-29', program: undefined }]
+  ];
+  for (const workouts of cases) {
+    const statuses = programStatus(workouts, '2026-07-30');
+    const expected = nextProgram(workouts);
+    assert.deepEqual(statuses.filter((s) => s.recommended).map((s) => s.program), [expected]);
+  }
+});
+
+test('programStatus: 今日実施していればdaysAgoは0', () => {
+  const workouts = [{ date: '2026-07-29', program: 'A' }];
+  const statuses = programStatus(workouts, '2026-07-29');
+  assert.equal(statuses.find((s) => s.program === 'A').daysAgo, 0);
 });

@@ -1,5 +1,5 @@
 import { $, onShow, toast, vibrate, todayStr, newId, esc } from './ui.js';
-import { nextProgram, calcVolume, lastSetFor, isPB, updateBests, restorableSession } from './workout.js';
+import { nextProgram, calcVolume, lastSetFor, isPB, updateBests, restorableSession, programStatus } from './workout.js';
 import { addWorkoutXp, checkBadges, BADGES, calcStreak } from './game.js';
 import { currentBodyweight } from './body.js';
 
@@ -46,12 +46,16 @@ export function renderWorkoutTab() {
   const exercises = store.get('exercises').filter((e) => e.program === session.program);
   const workouts = store.get('workouts');
   const bests = store.get('game').bests;
+  const statuses = programStatus(workouts, todayStr());
 
   $('#tab-workout').innerHTML = `
     <div class="card">
       <div class="ex-head">
         <div><span class="big">【${session.program}】</span> ${PROGRAM_NAMES[session.program]}</div>
         <button id="btnFinish" class="primary">終了して保存</button>
+      </div>
+      <div class="chips" id="programChips" style="grid-template-columns:repeat(3,1fr)">
+        ${statuses.map((s) => renderProgramChip(s)).join('')}
       </div>
       <div class="muted">今回の総挙上量 <span id="sessionVolume">0</span> kg</div>
     </div>
@@ -63,6 +67,18 @@ export function renderWorkoutTab() {
   $('#tab-workout').onclick = onExerciseClick;
   $('#btnFinish').addEventListener('click', finishSession);
   updateVolume();
+}
+
+function programDaysLabel(status) {
+  if (status.daysAgo === null) return '未実施';
+  if (status.daysAgo === 0) return '今日';
+  return `${status.daysAgo}日前`;
+}
+
+function renderProgramChip(status) {
+  const selected = status.program === session.program;
+  const mark = status.recommended ? '⟳ ' : '';
+  return `<button class="${selected ? 'primary' : ''}" data-act="switch-program" data-program="${status.program}">${mark}${status.program} ${programDaysLabel(status)}</button>`;
 }
 
 function renderExercise(ex, workouts, bests) {
@@ -101,9 +117,33 @@ function renderExercise(ex, workouts, bests) {
     </div>`;
 }
 
+/**
+ * チップをタップしてプログラムを手動で切り替える。
+ * 記録済みのセットが1つでもあれば確認ダイアログを挟む。承諾された場合、
+ * 2つのプログラムのセットが1つの記録に混ざって volume / 部位別XP が壊れるのを
+ * 防ぐため、既存のセットは保持せず新規プログラムで空セッションから始める。
+ * 「保持する」選択肢は意図的に用意しない。
+ */
+function switchProgram(program) {
+  if (program === session.program) return;
+  if (session.sets.length > 0) {
+    const ok = confirm(`記録済みの${session.sets.length}セットは破棄されます。${program}に切り替えますか？`);
+    if (!ok) return;
+    clearInterval(timerId);
+    $('#timer')?.remove();
+  }
+  session = { program, date: todayStr(), sets: [] };
+  persistSession();
+  renderWorkoutTab();
+}
+
 function onExerciseClick(e) {
   const btn = e.target.closest('[data-act]');
   if (!btn) return;
+  if (btn.dataset.act === 'switch-program') {
+    switchProgram(btn.dataset.program);
+    return;
+  }
   const row = btn.closest('.ex');
   const exId = row.dataset.ex;
   const step = Number(row.dataset.step) || 2.5;

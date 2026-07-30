@@ -62,6 +62,36 @@ export function nextProgram(workouts) {
 }
 
 /**
+ * 3プログラム全てについて「最後にやったのはいつか」「nextProgram が推す種目か」を
+ * まとめて返す。PROGRAMS の順（A→B→C）で常に3件返す。
+ *
+ * 日付が不正・欠損な記録は（weeklyVolume 等と同様に）例外を投げずに黙って除外する。
+ * workouts は storage / store.importAll から来る信頼できない外部データであり、
+ * 1件の壊れた記録のせいで画面のチップ表示全体が例外で落ちるのは避けたいため。
+ *
+ * daysAgo は todayStr（'YYYY-MM-DD'）を基準にした暦日差。当日なら0。
+ */
+export function programStatus(workouts, todayStr) {
+  const today = new Date(todayStr + 'T00:00:00Z');
+  const recommended = nextProgram(workouts);
+  const sorted = sortedByDate(workouts).reverse();
+
+  return PROGRAMS.map((program) => {
+    let lastDate = null;
+    for (const w of sorted) {
+      if (typeof w.date !== 'string' || !DATE_RE.test(w.date)) continue;
+      if (w.program === program) { lastDate = w.date; break; }
+    }
+    let daysAgo = null;
+    if (lastDate !== null) {
+      const d = new Date(lastDate + 'T00:00:00Z');
+      daysAgo = Math.round((today - d) / (24 * 3600 * 1000));
+    }
+    return { program, lastDate, daysAgo, recommended: program === recommended };
+  });
+}
+
+/**
  * 総挙上量 = Σ(重量 × 回数)。
  * weight/reps が数値化できない値（undefined など）でも NaN を伝播させず0として扱う
  * （防御的丸め）。NaN が混入すると reduce の結果・週合計・XP計算まで汚染され、

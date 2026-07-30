@@ -32,8 +32,17 @@ export function dayTotals(meals, dateStr) {
  * 達成率と警告を返す。
  * 設計方針: 上限超過より「下限割れ」を重く扱う。摂取を削るほど目的から遠ざかるため。
  * kcal:0(まだ何も記録していない日)は「食べなさすぎ」danger警告の対象にしない。
- * 朝いちばんの空腹状態を毎回 danger 扱いすると、この警告自体が無視される
- * ようになり、1,000kcal台への逆戻りを止めるという本来の目的を果たせなくなる。
+ *
+ * dayOver: その日の食事がほぼ終わっているとみなせるかどうか(呼び出し側が判定して渡す。
+ * 例: 表示している日付が今日より前、または今日で現地時刻が20時以降)。
+ * 「食べなさすぎ」danger警告は、まだ食事の途中である日中に出し続けると
+ * 一日の大半で表示され続ける壁紙と化し、1,000kcal台への逆戻りを止めるという
+ * 本来の目的を果たせなくなる。そのため dayOver でない間はdanger警告を出さず、
+ * 代わりに残量を info レベルで淡々と示す。上限超過(info)側は非対称に元々弱い
+ * 警告なので、dayOver に関わらず出してよい。
+ *
+ * 時計を直接読まず引数で受け取るのは、このモジュールを純粋関数のまま
+ * テスト可能に保つため(呼び出し側の js/mealTab.js が現在時刻から判定する)。
  *
  * totals は dayTotals を経由しない呼び出しにも備え、dayTotals と同じ toNum で
  * 防御的に丸める(achievement は単体でもエクスポートされているため)。
@@ -41,24 +50,32 @@ export function dayTotals(meals, dateStr) {
  * Infinity/NaN になり JSON.stringify で null に化ける(store.js で潰したのと
  * 同じ失敗モード)。ここではバーが伸びないだけで済むよう達成率を0%として扱う。
  */
-export function achievement(totals, targets) {
+export function achievement(totals, targets, { dayOver = false } = {}) {
   const kcal = toNum(totals?.kcal);
   const protein = toNum(totals?.protein);
   const alcoholMl = toNum(totals?.alcoholMl);
 
   const warnings = [];
 
-  if (kcal > 0 && kcal < targets.kcalFloor) {
-    warnings.push({
-      type: 'kcalFloor',
-      level: 'danger',
-      message: `${Math.round(kcal)}kcal は少なすぎます。この水準が続くと筋肉が分解されて目的と逆方向に進みます`
-    });
-  } else if (kcal > targets.kcalMax) {
+  if (kcal > targets.kcalMax) {
     warnings.push({
       type: 'kcalOver',
       level: 'info',
       message: `目標を${Math.round(kcal - targets.kcalMax)}kcal超えています`
+    });
+  } else if (dayOver) {
+    if (kcal > 0 && kcal < targets.kcalFloor) {
+      warnings.push({
+        type: 'kcalFloor',
+        level: 'danger',
+        message: `${Math.round(kcal)}kcal は少なすぎます。この水準が続くと筋肉が分解されて目的と逆方向に進みます`
+      });
+    }
+  } else {
+    warnings.push({
+      type: 'kcalRemaining',
+      level: 'info',
+      message: `残り ${Math.round(targets.kcalMin - kcal)}kcal`
     });
   }
 

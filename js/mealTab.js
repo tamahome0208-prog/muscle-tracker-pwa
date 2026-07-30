@@ -15,7 +15,10 @@ export function initMealTab(s) {
 export function renderStatusBar() {
   const targets = store.get('profile').targets;
   const totals = dayTotals(store.get('meals'), todayStr());
-  const a = achievement(totals, targets);
+  // このステータスバーは常に「今日」の集計しか表示しない(過去日を見るビューは
+  // 無い)ため、dayOver は現在時刻が20時以降かどうかだけで決まる。
+  const dayOver = new Date().getHours() >= 20;
+  const a = achievement(totals, targets, { dayOver });
 
   const setBar = (fillId, valueId, pct, text, state) => {
     const fill = $(fillId);
@@ -33,8 +36,13 @@ export function renderStatusBar() {
   setBar('#kcalFill', '#kcalValue', a.kcalPct,
     `${Math.round(totals.kcal)} / ${targets.kcalMin}〜${targets.kcalMax}`,
     totals.kcal > targets.kcalMax ? 'over' : (totals.kcal >= targets.kcalMin ? 'done' : ''));
+  // targets.alcoholMl が0(禁酒目標)だと 0/0 が NaN になり、幅が Infinity%/NaN% に
+  // 化ける。目標0のときは「1mlでも飲んだら100%」として扱う。
+  const alcoholPct = targets.alcoholMl > 0
+    ? (totals.alcoholMl / targets.alcoholMl) * 100
+    : (totals.alcoholMl > 0 ? 100 : 0);
   setBar('#alcoholFill', '#alcoholValue',
-    (totals.alcoholMl / targets.alcoholMl) * 100,
+    alcoholPct,
     `${totals.alcoholMl} / ${targets.alcoholMl}ml`,
     a.alcoholOver ? 'over' : '');
 
@@ -52,23 +60,37 @@ export function addFoodById(foodId) {
   // 遅れてしまい、「よく食べるものが1タップで届く位置に来る」という
   // このタブの存在意義そのものが体感で1回遅れて壊れる。
   store.set('foods', bumpFoodUse(store.get('foods'), foodId));
-  addItems([{ name: food.name, kcal: food.kcal, protein: food.protein, alcoholMl: food.alcoholMl ?? 0 }], 'tap');
-  toast(`${food.name} を追加`);
+  const saved = addItems([{ name: food.name, kcal: food.kcal, protein: food.protein, alcoholMl: food.alcoholMl ?? 0 }], 'tap');
+  // addItems が保存失敗のtoastを既に出している場合、ここで成功toastを重ねて
+  // 上書きしてしまうと「保存できませんでした」が一瞬で消え、実際には保存されて
+  // いないのに追加成功したように見えてしまう。
+  if (saved) toast(`${food.name} を追加`);
 }
 
-/** 任意の品目群を1回の食事として記録する */
+/** 任意の品目群を1回の食事として記録する。保存できたかどうかを呼び出し側に返す */
 export function addItems(items, source) {
   const meals = store.get('meals');
   meals.push({ id: newId('m'), datetime: nowStr(), items, source });
-  store.set('meals', meals);
+  try {
+    store.set('meals', meals);
+  } catch {
+    toast('保存できませんでした（端末の空き容量を確認してください）');
+    return false;
+  }
   renderStatusBar();
   renderMealTab();
+  return true;
 }
 
 export function renderMealTab() {
   const foods = sortFoodsByUse(store.get('foods'));
   const today = todayStr();
-  const meals = store.get('meals').filter((m) => m.datetime.startsWith(today));
+  // meals は importAll や手編集されたバックアップ経由で datetime/items を欠いた
+  // 壊れたレコードが混ざりうる境界のデータ。ここで弾かないと1件の壊れたレコードで
+  // #tab-meal 全体が空白のまま復旧できなくなる(js/nutrition.js の dayTotals と同じ方針)。
+  const meals = store.get('meals')
+    .filter((m) => m && typeof m.datetime === 'string' && Array.isArray(m.items))
+    .filter((m) => m.datetime.startsWith(today));
 
   $('#tab-meal').innerHTML = `
     <div class="card">
@@ -135,8 +157,14 @@ export function renderMealTab() {
 function openManualDialog() {
   const name = prompt('品目名');
   if (!name) return;
-  const kcal = Number(prompt('カロリー(kcal)', '0'));
-  const protein = Number(prompt('タンパク質(g)', '0'));
+  // prompt はキャンセルで null を返す。Number(null) は 0 になり「キャンセル＝0kcalで記録」
+  // という意図しない挙動になるため、null は数値変換する前に中断として扱う。
+  const kcalRaw = prompt('カロリー(kcal)', '0');
+  if (kcalRaw === null) return;
+  const proteinRaw = prompt('タンパク質(g)', '0');
+  if (proteinRaw === null) return;
+  const kcal = Number(kcalRaw);
+  const protein = Number(proteinRaw);
   if (Number.isNaN(kcal) || Number.isNaN(protein)) {
     toast('数値が読めませんでした');
     return;
@@ -185,8 +213,12 @@ async function scanBarcode() {
 
   const name = prompt(`未登録の商品です（${jan}）\n品名を入力すると次回から自動登録されます`);
   if (!name) return;
-  const kcal = Number(prompt('カロリー(kcal)', '0'));
-  const protein = Number(prompt('タンパク質(g)', '0'));
+  const kcalRaw = prompt('カロリー(kcal)', '0');
+  if (kcalRaw === null) return;
+  const proteinRaw = prompt('タンパク質(g)', '0');
+  if (proteinRaw === null) return;
+  const kcal = Number(kcalRaw);
+  const protein = Number(proteinRaw);
   if (Number.isNaN(kcal) || Number.isNaN(protein)) {
     toast('数値が読めませんでした');
     return;

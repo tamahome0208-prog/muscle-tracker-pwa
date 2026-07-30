@@ -92,8 +92,6 @@ function weekDiff(weeks) {
   return diff >= 0 ? `<span class="up">先週比 +${diff}kg ↗</span>` : `先週比 ${diff}kg`;
 }
 
-// 週キーの1つ前の週キーを返す。年またぎは weekKey に計算させる（js/recordTab.js と同じ実装）
-
 /** 脚の日の翌日は回復が間に合わないため警告を出す */
 function recordBadminton() {
   const today = todayStr();
@@ -102,7 +100,12 @@ function recordBadminton() {
   }
   const minutes = Number(prompt('何分やりましたか？', '60'));
   if (!minutes || Number.isNaN(minutes)) return;
-  store.set('badminton', [...store.get('badminton'), { date: today, durationMin: minutes }]);
+  try {
+    store.set('badminton', [...store.get('badminton'), { date: today, durationMin: minutes }]);
+  } catch {
+    toast('保存できませんでした（端末の空き容量を確認してください）');
+    return;
+  }
   toast('バドミントンを記録しました');
   renderHomeTab();
 }
@@ -125,7 +128,12 @@ async function recordBody() {
   }
   if (!values) return;
 
-  store.set('body', [...store.get('body'), { date: todayStr(), ...values, source: 'inbody' }]);
+  try {
+    store.set('body', [...store.get('body'), { date: todayStr(), ...values, source: 'inbody' }]);
+  } catch {
+    toast('保存できませんでした（端末の空き容量を確認してください）');
+    return;
+  }
   toast('体組成を記録しました');
   renderHomeTab();
 }

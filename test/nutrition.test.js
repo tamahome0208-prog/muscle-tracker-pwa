@@ -25,30 +25,53 @@ test('記録が無い日は0になる', () => {
   assert.deepEqual(dayTotals(MEALS, '2026-01-01'), { kcal: 0, protein: 0, alcoholMl: 0 });
 });
 
-test('達成率を返す', () => {
-  const a = achievement({ kcal: 1750, protein: 100, alcoholMl: 500 }, TARGETS);
+test('達成率を返す（一日の終わりに達成していれば警告なし）', () => {
+  const a = achievement({ kcal: 1750, protein: 100, alcoholMl: 500 }, TARGETS, { dayOver: true });
   assert.equal(a.proteinPct, 100);
   assert.equal(a.kcalPct, 100);
   assert.equal(a.alcoholOver, false);
   assert.deepEqual(a.warnings, []);
 });
 
-test('1500kcal未満は「食べなさすぎ」警告を出す', () => {
-  const a = achievement({ kcal: 1200, protein: 100, alcoholMl: 0 }, TARGETS);
+test('dayOverの日に1500kcal未満だと「食べなさすぎ」警告を出す', () => {
+  const a = achievement({ kcal: 1200, protein: 100, alcoholMl: 0 }, TARGETS, { dayOver: true });
   assert.ok(a.warnings.some((w) => w.level === 'danger' && w.type === 'kcalFloor'));
 });
 
-test('1000kcal台は筋肉が削れる領域としてより強い警告を出す', () => {
-  const a = achievement({ kcal: 1000, protein: 100, alcoholMl: 0 }, TARGETS);
+test('dayOverの日に1000kcal台は筋肉が削れる領域としてより強い警告を出す', () => {
+  const a = achievement({ kcal: 1000, protein: 100, alcoholMl: 0 }, TARGETS, { dayOver: true });
   const w = a.warnings.find((x) => x.type === 'kcalFloor');
   assert.equal(w.level, 'danger');
   assert.match(w.message, /筋肉/);
 });
 
-test('目標上限を超えると軽い注意のみ（下限割れより弱い）', () => {
+test('目標上限を超えると軽い注意のみ（下限割れより弱い、dayOverに関わらず出る）', () => {
   const a = achievement({ kcal: 2200, protein: 100, alcoholMl: 0 }, TARGETS);
   const w = a.warnings.find((x) => x.type === 'kcalOver');
   assert.equal(w.level, 'info');
+});
+
+test('日中(dayOverでない)は下限割れでも danger を出さず、残量を info で示す', () => {
+  // 朝の180kcalの朝食。1日の途中でdangerを出し続けると壁紙化して無視されるようになる。
+  const a = achievement({ kcal: 180, protein: 20, alcoholMl: 0 }, TARGETS, { dayOver: false });
+  assert.ok(!a.warnings.some((w) => w.type === 'kcalFloor'));
+  assert.ok(!a.warnings.some((w) => w.level === 'danger'));
+  const remaining = a.warnings.find((w) => w.type === 'kcalRemaining');
+  assert.ok(remaining);
+  assert.equal(remaining.level, 'info');
+  assert.equal(remaining.message, `残り ${TARGETS.kcalMin - 180}kcal`);
+});
+
+test('同じ総量でも一日が終わっていれば(dayOver: true) danger警告に切り替わる', () => {
+  const a = achievement({ kcal: 180, protein: 20, alcoholMl: 0 }, TARGETS, { dayOver: true });
+  const w = a.warnings.find((x) => x.type === 'kcalFloor');
+  assert.ok(w);
+  assert.equal(w.level, 'danger');
+});
+
+test('dayOverを省略すると日中扱い(danger警告を出さない)がデフォルトになる', () => {
+  const a = achievement({ kcal: 180, protein: 20, alcoholMl: 0 }, TARGETS);
+  assert.ok(!a.warnings.some((w) => w.level === 'danger'));
 });
 
 test('タンパク質不足を警告する', () => {

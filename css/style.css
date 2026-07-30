@@ -5,12 +5,15 @@
   --track: #3a3a40;
   --on-accent: #1a0d08; --on-pb: #2a1f00;
   --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-top: env(safe-area-inset-top, 0px);
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html { overscroll-behavior-y: contain; }
 body {
   margin: 0; background: var(--bg); color: var(--text);
   font-family: system-ui, -apple-system, "Noto Sans JP", sans-serif;
   padding-bottom: calc(64px + var(--safe-bottom));
+  overscroll-behavior-y: contain;
 }
 /* 休憩タイマー表示中だけ下側余白を広げる。#timer はタブバーの上に浮くバナーで、
    通常の64px余白の上にさらに約65px重なる。これが無いと最後の種目の✓ボタンの列を
@@ -20,7 +23,7 @@ body.timer-active { padding-bottom: calc(150px + var(--safe-bottom)); }
 .hidden { display: none !important; }
 
 #statusBar { position: sticky; top: 0; z-index: 10; background: var(--panel);
-  border-bottom: 1px solid var(--line); padding: 8px 12px; }
+  border-bottom: 1px solid var(--line); padding: calc(8px + var(--safe-top)) 12px 8px; }
 .bar { display: grid; grid-template-columns: 90px 1fr auto; gap: 8px;
   align-items: center; font-size: 13px; margin: 4px 0; }
 .bar-label { color: var(--muted); }

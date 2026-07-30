@@ -33,8 +33,11 @@ body.timer-active { padding-bottom: calc(150px + var(--safe-bottom)); }
 #warnings:empty { display: none; }
 .warn { font-size: 13px; padding: 6px 8px; border-radius: 6px; margin-top: 6px; }
 .warn.danger { background: #3a1218; color: #ffb3ba; border: 1px solid var(--danger); }
-.warn.warn { background: #3a2f12; color: #ffe0a3; }
-.warn.info { background: #12202e; color: #bcd8ff; }
+/* 鉄と炎パレットに統一。以前はシアン時代の配色(info)や、金(--pb)に寄りすぎた
+   琥珀色(warn)が残っていた。金は「自己ベストだけ」のルールを薄めないよう、
+   warn/info どちらもPBの --pb (#ffd166) とは明確に異なる色にする。 */
+.warn.warn { background: #2b1810; color: #ffb37a; }
+.warn.info { background: #1c1c20; color: #cbc6bf; }
 
 main { padding: 12px; }
 h2 { font-size: 16px; margin: 16px 0 8px; }
@@ -117,8 +120,12 @@ button:active { transform: scale(.97); }
   50% { transform: scale(1.03); }
 }
 
+/* トーストの位置。#timer(bottom:76px, 高さ約65px なので上端は約141px)と重ならない
+   高さにする。recordSet は毎回トースト表示とタイマー開始を連続して行うため、
+   ここが被っているとPBのたびに新しい休憩カウントダウンが2.2秒間トーストの下に
+   隠れてしまっていた。 */
 #toast { position: fixed; left: 50%; transform: translateX(-50%);
-  bottom: calc(88px + var(--safe-bottom)); background: var(--panel); color: var(--text);
+  bottom: calc(150px + var(--safe-bottom)); background: var(--panel); color: var(--text);
   border: 1px solid var(--line);
   font-weight: 700; padding: 12px 18px; border-radius: 20px; z-index: 30; }
 /* 自己ベストの通知だけ金にする。それ以外のトーストは金を使わない */

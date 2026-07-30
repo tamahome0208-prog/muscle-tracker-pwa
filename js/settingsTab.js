@@ -82,16 +82,29 @@ export function renderSettingsTab() {
       return;
     }
 
-    store.set('profile', { ...profile, height, weight, targets: { protein, kcalMin, kcalMax, kcalFloor, alcoholMl } });
+    // profile.weight はInBody記録が無いときのvolume計算のフォールバックそのものに
+    // なったため、ここでの保存失敗を黙って無視できない(他の保存パスと同様に
+    // try/catchで失敗を検知し、ボタンが何も言わずに無反応になるのを防ぐ)。
+    try {
+      store.set('profile', { ...profile, height, weight, targets: { protein, kcalMin, kcalMax, kcalFloor, alcoholMl } });
+    } catch {
+      toast('保存できませんでした（端末の空き容量を確認してください）');
+      return;
+    }
     toast('目標を保存しました');
   });
 
   $('#btnSaveSettings').addEventListener('click', () => {
-    store.set('settings', {
-      ...settings,
-      geminiKey: $('#geminiKey').value.trim(),
-      useOpenFoodFacts: $('#useOff').checked
-    });
+    try {
+      store.set('settings', {
+        ...settings,
+        geminiKey: $('#geminiKey').value.trim(),
+        useOpenFoodFacts: $('#useOff').checked
+      });
+    } catch {
+      toast('保存できませんでした（端末の空き容量を確認してください）');
+      return;
+    }
     toast('設定を保存しました');
   });
 

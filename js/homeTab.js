@@ -40,24 +40,23 @@ export function renderHomeTab() {
       <button id="btnGoWorkout" class="primary" style="margin-top:8px;width:100%">トレーニングを始める</button>
     </div>
 
-    ${!initial ? `
-    <div class="card">
-      <div class="muted">連続週数</div>
-      <div class="big">🔥 ${streak} 週</div>
-      <div class="muted">今週の総挙上量 ${thisWeekVolume(weeks, today)} kg ${weekDiff(weeks, feasibility)}</div>
-    </div>` : ''}
-
     <div class="card">
       <div class="muted">今週の達成状況</div>
       <div class="big${feasibility.remaining === 0 ? ' up' : ''}">${feasibilityHeadline(feasibility)}</div>
       <div class="muted">${feasibilitySub(feasibility)}</div>
+      <div class="muted">今週の総挙上量 ${thisWeekVolume(weeks, today)} kg ${weekDiff(weeks, feasibility)}</div>
     </div>
+
+    ${!initial ? `
+    <div class="card">
+      <div class="muted">連続週数</div>
+      <div class="big">🔥 ${streak} 週</div>
+    </div>` : ''}
 
     ${initial ? `
     <div class="card">
       <h2 style="margin-top:0">最初の4週間</h2>
-      <p class="muted">この期間は2つだけ追いかけます。ここが習慣になれば、あとは自動的に進みます。</p>
-      <div>週3ジム <b>${status.gymCount} / 3</b> ${status.gymDone ? '✅' : ''}</div>
+      <p class="muted">この期間は2つだけ追いかけます。1つは上の「今週の達成状況」（週3ジム）、もう1つはこちらの朝プロテイン。ここが習慣になれば、あとは自動的に進みます。</p>
       <div>朝プロテイン <b>${status.proteinMornings}</b> 日 / 今週</div>
     </div>` : ''}
 

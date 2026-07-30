@@ -10,10 +10,63 @@ const EMPTY_SESSION = { program: null, date: null, startedAt: null, sets: [] };
 let store;
 let session = null; // { program, date, startedAt, sets: [] }
 let timerId = null;
+let wakeLock = null; // WakeLockSentinel | null
 
 export function initWorkoutTab(s) {
   store = s;
   onShow('workout', renderWorkoutTab);
+
+  // セット間の90秒待ちのたびに画面が消えて、汗ばんだ手でロック解除する不満を
+  // 減らすための Screen Wake Lock。navigator.wakeLock 非対応環境や request() の
+  // 拒否は静かに無視する(acquireWakeLock内でcatch済み)。バッテリー消費があるため
+  // 設定タブでON/OFFできる(既定ON、js/store.js の settings.wakeLock)。
+  //
+  // ページが隠れるとブラウザ側でロックが強制解放される仕様のため、再表示時に
+  // セッションが進行中ならここで再取得する。逆に隠れる瞬間は明示的に解放しておく
+  // (呼ばなくてもブラウザが解放するが、wakeLock変数を確実にnullへ揃えるため)。
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      releaseWakeLock();
+    } else if (session) {
+      acquireWakeLock();
+    }
+  });
+
+  // トレーニングタブを離れたら解放する。#tabbar のボタンは初期化時に一度だけ
+  // 生成され再描画されないので addEventListener でよい(js/main.js の
+  // stopCamera 呼び出しと同じパターン)。
+  document.querySelectorAll('#tabbar button').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (btn.dataset.tab !== 'workout') releaseWakeLock();
+    });
+  });
+}
+
+/**
+ * navigator.wakeLock が無い環境・request() が拒否される場合(タブが非表示、
+ * バッテリーセーバー等)の両方を静かに無視する。ここが例外を投げると
+ * セット記録そのものを止めかねないため、try/catchの外に一切ロジックを
+ * 漏らさない(呼び出し側は await/結果チェックをせず「投げっぱなし」にできる)。
+ */
+async function acquireWakeLock() {
+  try {
+    if (!store.get('settings').wakeLock) return;
+    if (!('wakeLock' in navigator)) return;
+    if (wakeLock && !wakeLock.released) return; // 既に保持中なら取り直さない
+    wakeLock = await navigator.wakeLock.request('screen');
+    wakeLock.addEventListener('release', () => { wakeLock = null; });
+  } catch {
+    wakeLock = null;
+  }
+}
+
+function releaseWakeLock() {
+  try {
+    wakeLock?.release();
+  } catch {
+    /* 解放自体の失敗は無視してよい */
+  }
+  wakeLock = null;
 }
 
 /**
@@ -35,6 +88,7 @@ export function startSession(date) {
   const restored = restorableSession(store.get('session'), today);
   if (restored) {
     session = restored;
+    acquireWakeLock();
     return true;
   }
   // 古い/壊れたセッションが残っていたら復元せず捨てる。次のセット記録で新しいセッションが
@@ -47,6 +101,7 @@ export function startSession(date) {
   const program = nextProgram(store.get('workouts'));
   if (targetDate !== today && !confirmSameDayDuplicate(targetDate, program)) return false;
   session = { program, date: targetDate, startedAt: today, sets: [] };
+  acquireWakeLock();
   return true;
 }
 
@@ -229,6 +284,7 @@ function recordSet(btn, exId, weight, reps) {
   btn.classList.add('done');
   session.sets.push({ exId, weight, reps });
   persistSession();
+  acquireWakeLock(); // 意図的にawaitしない: 失敗・非対応でもセット記録自体は止めない
 
   const bests = store.get('game').bests;
   if (isPB(bests, exId, weight, reps)) {
@@ -339,6 +395,7 @@ function finishSession() {
 
   clearInterval(timerId);
   removeTimer();
+  releaseWakeLock();
   toast(`保存しました（総挙上量 ${Math.round(volume)}kg）`);
   session = null;
   // 終了して保存できたので、復元用に持っていた進行中セッションは消してよい。

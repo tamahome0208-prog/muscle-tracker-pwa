@@ -40,7 +40,7 @@ export const DEFAULTS = deepFreeze({
     bests: {},
     badges: []
   },
-  settings: { geminiKey: '', useOpenFoodFacts: true, photoReminder: true },
+  settings: { geminiKey: '', useOpenFoodFacts: true, photoReminder: true, wakeLock: true },
   // 進行中（未終了）のトレーニングセッション。Androidがバックグラウンドで
   // ページを破棄しても記録済みのセットを失わないための永続化用の場所。
   // date は「記録される対象の日付」(過去日の場合もある)、startedAt は

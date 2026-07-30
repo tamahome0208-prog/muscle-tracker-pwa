@@ -15,14 +15,14 @@ export function renderSettingsTab() {
   $('#tab-settings').innerHTML = `
     <div class="card">
       <h2 style="margin-top:0">目標</h2>
-      <div class="ex-ctrl">身長 <input type="number" id="tHeight" value="${profile.height}" style="width:80px">cm</div>
-      <div class="ex-ctrl">体重 <input type="number" id="tWeight" value="${profile.weight}" style="width:80px">kg</div>
+      <div class="ex-ctrl">身長 <input type="number" inputmode="decimal" id="tHeight" value="${profile.height}" style="width:80px">cm</div>
+      <div class="ex-ctrl">体重 <input type="number" inputmode="decimal" id="tWeight" value="${profile.weight}" style="width:80px">kg</div>
       <p class="muted">この体重はInBody記録が無いときのフォールバックです。InBody記録があれば常にそちらの最新値を優先して総挙上量・XPを計算します。</p>
-      <div class="ex-ctrl">タンパク質 <input type="number" id="tProtein" value="${t.protein}" style="width:80px">g</div>
-      <div class="ex-ctrl">カロリー下限 <input type="number" id="tKcalMin" value="${t.kcalMin}" style="width:90px"></div>
-      <div class="ex-ctrl">カロリー上限 <input type="number" id="tKcalMax" value="${t.kcalMax}" style="width:90px"></div>
-      <div class="ex-ctrl">警告ライン <input type="number" id="tKcalFloor" value="${t.kcalFloor}" style="width:90px"></div>
-      <div class="ex-ctrl">発泡酒 <input type="number" id="tAlcohol" value="${t.alcoholMl}" style="width:90px">ml</div>
+      <div class="ex-ctrl">タンパク質 <input type="number" inputmode="decimal" id="tProtein" value="${t.protein}" style="width:80px">g</div>
+      <div class="ex-ctrl">カロリー下限 <input type="number" inputmode="numeric" id="tKcalMin" value="${t.kcalMin}" style="width:90px"></div>
+      <div class="ex-ctrl">カロリー上限 <input type="number" inputmode="numeric" id="tKcalMax" value="${t.kcalMax}" style="width:90px"></div>
+      <div class="ex-ctrl">警告ライン <input type="number" inputmode="numeric" id="tKcalFloor" value="${t.kcalFloor}" style="width:90px"></div>
+      <div class="ex-ctrl">発泡酒 <input type="number" inputmode="numeric" id="tAlcohol" value="${t.alcoholMl}" style="width:90px">ml</div>
       <p class="muted">警告ラインを下回った日は「食べなさすぎ」の警告が出ます。摂取を削るほど筋肉が落ちるため、下限側を守る設計です。</p>
       <button id="btnSaveTargets" class="primary">保存</button>
     </div>
@@ -33,6 +33,8 @@ export function renderSettingsTab() {
       <p class="muted">食事写真・レシート画像・インボディ結果紙の写真の3種類がGoogleに送信されます。インボディ結果紙の写真には体重・筋肉量・体脂肪率が写っています。撮影タブの体の進捗写真や、保存済みのトレーニング記録・体重の履歴データは送信されません。無料枠内で動作します。</p>
       <label class="ex-ctrl"><input type="checkbox" id="useOff" ${settings.useOpenFoodFacts ? 'checked' : ''}>
         バーコード検索でOpen Food Factsに問い合わせる（送信するのはJANコード13桁のみ）</label>
+      <label class="ex-ctrl"><input type="checkbox" id="useWakeLock" ${settings.wakeLock ? 'checked' : ''}>
+        トレーニング中は画面を常にオンにする（バッテリーを消費します）</label>
       <button id="btnSaveSettings" class="primary">保存</button>
     </div>
 
@@ -99,7 +101,8 @@ export function renderSettingsTab() {
       store.set('settings', {
         ...settings,
         geminiKey: $('#geminiKey').value.trim(),
-        useOpenFoodFacts: $('#useOff').checked
+        useOpenFoodFacts: $('#useOff').checked,
+        wakeLock: $('#useWakeLock').checked
       });
     } catch {
       toast('保存できませんでした（端末の空き容量を確認してください）');

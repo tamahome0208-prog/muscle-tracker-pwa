@@ -1,4 +1,4 @@
-const CACHE = 'muscle-tracker-v2';
+const CACHE = 'muscle-tracker-v3';
 
 const ASSETS = [
   './',
@@ -22,6 +22,7 @@ const ASSETS = [
   'js/mealTab.js',
   'js/photoTab.js',
   'js/recordTab.js',
+  'js/dayView.js',
   'js/settingsTab.js',
   'data/exercises.json',
   'data/foods.json',

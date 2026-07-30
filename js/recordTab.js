@@ -1,5 +1,5 @@
 import { $, onShow, todayStr } from './ui.js';
-import { weeklyVolume, weekKey, previousWeekKey } from './workout.js';
+import { weeklyVolume, weekKey, previousWeekKey, weekFeasibility } from './workout.js';
 import { bodySeries, bodyDiff, latestBody } from './body.js';
 import { radarData, BADGES } from './game.js';
 import { drawVolumeChart, drawBodyChart, drawRadarChart } from './charts.js';
@@ -14,6 +14,7 @@ export function initRecordTab(s) {
 export function renderRecordTab() {
   const workouts = store.get('workouts');
   const weeks = weeklyVolume(workouts);
+  const feasibility = weekFeasibility(workouts, todayStr());
   const game = store.get('game');
   const body = store.get('body');
   const diff = bodyDiff(body);
@@ -23,7 +24,7 @@ export function renderRecordTab() {
     <div class="card">
       <h2 style="margin-top:0">週次総挙上量</h2>
       <canvas id="volumeChart"></canvas>
-      <div class="muted">${weekSummary(weeks)}</div>
+      <div class="muted">${weekSummary(weeks, feasibility)}</div>
     </div>
     <div class="card">
       <h2 style="margin-top:0">体組成</h2>
@@ -63,8 +64,13 @@ function fmt(n) {
 
 // weeklyVolume の系列は疎（トレーニングが無い週は要素が無い）。
 // 直前の要素が本当に「先週」とは限らないので、週キーが隣接している時だけ先週比を出す。
-function weekSummary(weeks) {
+// 週の途中で先週比を出さない。完了した先週と進行中の今週を比べれば当然マイナスで、
+// まだ終わっていない週を失敗として見せることになる。目標回数を終えてから出す。
+function weekSummary(weeks, feasibility) {
   if (weeks.length < 2) return '2週分たまると先週比が出ます';
+  if (feasibility && feasibility.remaining > 0) {
+    return `今週は進行中（あと${feasibility.remaining}回）· 終わったら先週比を出します`;
+  }
   const last = weeks[weeks.length - 1];
   const prev = weeks[weeks.length - 2];
   if (prev.week !== previousWeekKey(last.week)) return `前回トレした週(${prev.week})から再開`;

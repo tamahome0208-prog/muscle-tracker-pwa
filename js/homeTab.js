@@ -44,7 +44,7 @@ export function renderHomeTab() {
     <div class="card">
       <div class="muted">連続週数</div>
       <div class="big">🔥 ${streak} 週</div>
-      <div class="muted">今週の総挙上量 ${thisWeekVolume(weeks, today)} kg ${weekDiff(weeks)}</div>
+      <div class="muted">今週の総挙上量 ${thisWeekVolume(weeks, today)} kg ${weekDiff(weeks, feasibility)}</div>
     </div>` : ''}
 
     <div class="card">
@@ -136,8 +136,12 @@ function thisWeekVolume(weeks, today) {
 }
 
 // 疎な系列なので、週キーが隣接していない場合は「先週比」と呼ばない
-function weekDiff(weeks) {
+// 週の途中で先週比を出さない。3回やった先週と1回しかやっていない今週を比べれば
+// 当然マイナスになり、まだ失敗していないのに失敗したと言うことになる。
+// 今週の目標回数を終えてから（＝比較が公平になってから）出す。
+function weekDiff(weeks, feasibility) {
   if (weeks.length < 2) return '';
+  if (feasibility && feasibility.remaining > 0) return '';
   const last = weeks[weeks.length - 1];
   const prev = weeks[weeks.length - 2];
   if (prev.week !== previousWeekKey(last.week)) return '';

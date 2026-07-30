@@ -41,9 +41,12 @@ async function callGeminiRaw(prompt, blob, apiKey) {
 
   let res;
   try {
-    res = await fetch(`${ENDPOINT}?key=${encodeURIComponent(apiKey)}`, {
+    // APIキーはURLのクエリ文字列ではなくヘッダーで送る。クエリは経路上の
+    // プロキシ/アクセスログに残りやすく、資格情報の漏洩経路として最も
+    // 警戒すべき箇所のひとつ。
+    res = await fetch(ENDPOINT, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
       signal: controller.signal,
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: blob.type || 'image/jpeg', data: base64 } }] }],

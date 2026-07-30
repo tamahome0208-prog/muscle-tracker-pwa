@@ -5,6 +5,9 @@ import { BADGES, checkBadges, calcStreak } from './game.js';
 let store;
 let stream = null;
 let currentAngle = 'front';
+let ghostUrl = null;
+let compareUrls = [];
+let timelineUrls = [];
 
 export function initPhotoTab(s) {
   store = s;
@@ -66,6 +69,10 @@ export async function renderPhotoTab() {
 }
 
 async function startCamera() {
+  // renderPhotoTab はアングル切り替えのたびに呼ばれる。ここで前回のstreamを
+  // 止めておかないと、切り替えるたびにMediaStreamがリークし続け、Android側の
+  // カメラインジケータが点灯したままになり他アプリからカメラが使えなくなる。
+  stopCamera();
   try {
     stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
     const cam = $('#cam');
@@ -87,11 +94,18 @@ export function stopCamera() {
 async function showGhost() {
   const prev = await latestByAngle(currentAngle);
   const ghost = $('#ghost');
+  // 差し替え前に必ず前回のURLを解放する。しないたびに1枚分のBlobが
+  // メモリに残り続け、写真タブを訪れるたびに写真の枚数分メモリが積み上がる。
+  if (ghostUrl) {
+    URL.revokeObjectURL(ghostUrl);
+    ghostUrl = null;
+  }
   if (!prev) {
     ghost.classList.add('hidden');
     return;
   }
-  ghost.src = toUrl(prev);
+  ghostUrl = toUrl(prev);
+  ghost.src = ghostUrl;
   ghost.classList.remove('hidden');
 }
 
@@ -106,7 +120,12 @@ async function shoot() {
   canvas.height = cam.videoHeight;
   canvas.getContext('2d').drawImage(cam, 0, 0);
   const blob = await new Promise((r) => canvas.toBlob(r, 'image/jpeg', 0.95));
-  await savePhoto({ date: todayStr(), angle: currentAngle, source: blob });
+  try {
+    await savePhoto({ date: todayStr(), angle: currentAngle, source: blob });
+  } catch {
+    toast('保存できませんでした（端末の空き容量を確認してください）');
+    return;
+  }
   toast('保存しました');
   await showGhost();
   await renderTimeline();
@@ -115,7 +134,13 @@ async function shoot() {
 async function onFilePicked(e) {
   const file = e.target.files?.[0];
   if (!file) return;
-  await savePhoto({ date: todayStr(), angle: currentAngle, source: file });
+  try {
+    await savePhoto({ date: todayStr(), angle: currentAngle, source: file });
+  } catch {
+    toast('保存できませんでした（端末の空き容量を確認してください）');
+    e.target.value = '';
+    return;
+  }
   e.target.value = '';
   toast('保存しました');
   await showGhost();
@@ -125,6 +150,10 @@ async function onFilePicked(e) {
 async function onCompareClick(e) {
   const btn = e.target.closest('[data-cmp]');
   if (!btn) return;
+
+  // 前回の比較で作った2枚分のURLをここで必ず解放する(早期returnする分岐でも)。
+  for (const u of compareUrls) URL.revokeObjectURL(u);
+  compareUrls = [];
 
   const after = await latestByAngle(currentAngle);
   const before = btn.dataset.cmp === 'first'
@@ -142,10 +171,14 @@ async function onCompareClick(e) {
     return hit ? `筋肉量 ${hit.muscle}kg / 体脂肪 ${hit.fatPct}%` : '体組成の記録なし';
   };
 
+  const beforeUrl = toUrl(before);
+  const afterUrl = toUrl(after);
+  compareUrls = [beforeUrl, afterUrl];
+
   $('#compareArea').innerHTML = `
     <div class="compare">
-      <img src="${toUrl(before)}" alt="">
-      <img class="after" id="afterImg" src="${toUrl(after)}" alt="">
+      <img src="${beforeUrl}" alt="">
+      <img class="after" id="afterImg" src="${afterUrl}" alt="">
     </div>
     <input type="range" id="cmpRange" min="0" max="100" value="50">
     <div class="muted">${before.date}: ${bodyAt(before.date)}</div>
@@ -185,15 +218,19 @@ function grantCompareBadge() {
 
 async function renderTimeline() {
   const all = await listPhotos();
+  // 再描画のたびに写真枚数分のURLを新規発行するので、直前の分を必ず解放する。
+  // しないと写真タブに来るたびに全写真ぶんのBlobが積み上がる。
+  for (const u of timelineUrls) URL.revokeObjectURL(u);
+  timelineUrls = all.map((p) => toUrl(p));
   $('#timeline').innerHTML = all.length === 0
     ? '<p class="muted">まだ写真がありません</p>'
-    : all.map((p) => `
+    : all.map((p, idx) => `
         <div class="ex">
           <div class="ex-head">
             <span>${p.date} / ${ANGLES.find((a) => a.id === p.angle)?.label ?? p.angle}</span>
             <button data-delphoto="${p.id}">削除</button>
           </div>
-          <img src="${toUrl(p)}" style="width:80px;border-radius:6px" alt="">
+          <img src="${timelineUrls[idx]}" style="width:80px;border-radius:6px" alt="">
         </div>`).join('');
 
   $('#timeline').onclick = async (e) => {

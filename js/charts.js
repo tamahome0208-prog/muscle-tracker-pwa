@@ -1,4 +1,34 @@
-// Chart.js は index.html でグローバルに読み込んでいる（オフライン用にvendor同梱）
+// Chart.js は vendor/chart.umd.js に同梱している（オフライン対応・sw.js の
+// プリキャッシュ対象）が、index.html では読み込まない。アプリの総バイト数の
+// 過半をこのファイルが占めており、記録タブを一度も開かない起動（ホームで
+// プロテインを1件記録するだけ、等）でも毎回ダウンロード・パース・実行コストを
+// 払っていたため、記録タブの初回描画時にだけ動的に <script> を注入して読み込む。
+let chartLoadPromise = null;
+
+/**
+ * Chart.js を初回だけ動的に読み込む。既に読み込み済み(Chartがグローバルに
+ * 存在する)なら即座に解決する。2回目以降の呼び出しは同じPromiseを返すため、
+ * 記録タブを何度開いても<script>タグは1回しか注入されない。
+ * 読み込みに失敗した場合(オフラインでキャッシュにも無い等)は次回また試せるよう
+ * chartLoadPromise をリセットしてから reject する。呼び出し側(js/recordTab.js)は
+ * これを catch し、グラフ以外のカードは通常どおり表示すること。
+ */
+export function loadChartJs() {
+  if (typeof Chart !== 'undefined') return Promise.resolve();
+  if (chartLoadPromise) return chartLoadPromise;
+  chartLoadPromise = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'vendor/chart.umd.js';
+    script.onload = () => resolve();
+    script.onerror = () => {
+      chartLoadPromise = null;
+      reject(new Error('Chart.jsの読み込みに失敗しました'));
+    };
+    document.head.appendChild(script);
+  });
+  return chartLoadPromise;
+}
+
 const registry = new Map();
 
 function draw(canvasId, config) {

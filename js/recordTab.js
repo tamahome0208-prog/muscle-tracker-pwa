@@ -2,7 +2,7 @@ import { $, onShow, todayStr, icon } from './ui.js';
 import { weeklyVolume, weekKey, previousWeekKey, weekFeasibility } from './workout.js';
 import { bodySeries, bodyDiff, latestBody } from './body.js';
 import { radarData, BADGES } from './game.js';
-import { drawVolumeChart, drawBodyChart, drawRadarChart } from './charts.js';
+import { loadChartJs, drawVolumeChart, drawBodyChart, drawRadarChart } from './charts.js';
 import { initDayView, renderDayView } from './dayView.js';
 
 let store;
@@ -55,14 +55,29 @@ export function renderRecordTab() {
       }).join('')}
     </div>`;
 
-  drawVolumeChart('volumeChart', weeks);
-  drawBodyChart('bodyChart', bodySeries(body));
-  drawRadarChart('radarChart', radarData(game.xp));
-
   // #tab-record は日付ビュー(js/dayView.js)との間で使い回されるコンテナなので、
   // addEventListener だと record タブに戻ってくるたびにハンドラが積み重なる。
   // onclick 代入で常に1つに保つ。
   $('#tab-record').onclick = onRecordTabClick;
+
+  // Chart.js はここで初めて動的に読み込む(js/charts.js の loadChartJs 参照)。
+  // カレンダー・称号・体組成の数値等、canvas を使わないカードは上の innerHTML 代入で
+  // 既に描画済みなので、これが失敗してもタブ全体が空白になることはない。
+  loadChartJs().then(() => {
+    drawVolumeChart('volumeChart', weeks);
+    drawBodyChart('bodyChart', bodySeries(body));
+    drawRadarChart('radarChart', radarData(game.xp));
+  }).catch((err) => {
+    console.warn('グラフの読み込みに失敗しました:', err);
+    for (const id of ['volumeChart', 'bodyChart', 'radarChart']) {
+      const canvas = document.getElementById(id);
+      if (!canvas) continue;
+      const msg = document.createElement('p');
+      msg.className = 'muted';
+      msg.textContent = 'グラフを読み込めませんでした（オフラインなど）。数値やカレンダーは下に表示されています。';
+      canvas.replaceWith(msg);
+    }
+  });
 }
 
 /** カレンダーのセルをタップしたら、その日付の記録一覧(js/dayView.js)を開く */

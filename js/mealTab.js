@@ -1,4 +1,4 @@
-import { $, onShow, toast, todayStr, nowStr, newId, esc } from './ui.js';
+import { $, onShow, toast, todayStr, nowStr, newId, esc, icon } from './ui.js';
 import { dayTotals, achievement, sortFoodsByUse, bumpFoodUse } from './nutrition.js';
 import { isBarcodeSupported, scanJan, lookupJan } from './barcode.js';
 import { analyzeMealPhoto, analyzeReceipt, OcrError } from './ocr.js';
@@ -106,10 +106,10 @@ export function renderMealTab() {
         ${foods.map((f) => `<button data-food="${f.id}">${esc(f.name)}<br><span class="muted">${f.kcal}kcal / P${f.protein}g</span></button>`).join('')}
       </div>
       <div class="chips" style="margin-top:8px">
-        <button id="btnBarcode">📷 バーコード</button>
-        <button id="btnPhoto">🍱 食事写真</button>
-        <button id="btnReceipt">🧾 レシート</button>
-        <button id="btnManual">✏️ 手入力</button>
+        <button id="btnBarcode">${icon('i-camera')} バーコード</button>
+        <button id="btnPhoto">${icon('i-camera')} 食事写真</button>
+        <button id="btnReceipt">${icon('i-bowl')} レシート</button>
+        <button id="btnManual">手入力</button>
       </div>
     </div>
     <div class="card">

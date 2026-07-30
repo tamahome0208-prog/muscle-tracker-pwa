@@ -53,6 +53,31 @@ h2 { font-size: 16px; margin: 16px 0 8px; }
 .muted { color: var(--muted); font-size: 13px; }
 .up { color: var(--ok); }
 
+/* カード階層。今日やること(ホームの1枚目)を主役に、連続週数・筋肉が落ち始めるまで・
+   部位レベルは控えめにする。新しい色相は増やさず、サイズ・太さ・余白だけで差をつける
+   （既存のrust左罫線は #tab-home .card:first-child が既に担う）。 */
+.card-primary { padding: 20px 16px 18px; }
+.card-primary .big { font-size: 32px; }
+.card-secondary { padding: 8px 12px; }
+.card-secondary h2 { font-size: 13px; margin: 2px 0 8px; color: var(--muted); font-weight: 600; }
+.card-secondary .muted:first-child { font-size: 12px; }
+.card-secondary .big { font-size: 20px; font-weight: 600; }
+
+/* 絵文字の代わりに使うインラインアイコン。currentColor で周囲の文字色を継承するため
+   色は個別に指定しない（部位レベルのトルソーだけは style 属性で明示的に上書きする）。 */
+.icon { width: 1.1em; height: 1.1em; vertical-align: -0.15em; flex-shrink: 0; }
+.icon-sm { width: 0.85em; height: 0.85em; }
+#tabbar button .icon { width: 22px; height: 22px; display: block; margin: 0 auto 2px; }
+
+/* 部位レベル: トルソー6体を横並びで表示する。torso-base(輪郭)の上に
+   部位ごとの overlay を重ね、絶対配置で位置合わせする。375px幅の画面でも
+   横スクロールしないよう、6体合計を100%幅に収める。 */
+.torso-row { display: flex; justify-content: space-between; gap: 4px; margin-top: 4px; }
+.torso-item { display: flex; flex-direction: column; align-items: center; width: 15%; }
+.torso-box { position: relative; width: 100%; max-width: 36px; aspect-ratio: 40 / 56; }
+.torso-layer { position: absolute; inset: 0; width: 100%; height: 100%; }
+.torso-label { font-size: 11px; margin-top: 4px; text-align: center; white-space: nowrap; }
+
 button { font: inherit; color: inherit; background: #202024;
   border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px;
   min-height: 48px; }
@@ -74,7 +99,8 @@ button:active { transform: scale(.97); }
 /* ✓ セットボタン。このアプリで最も連打されるコントロールなので
    最低限の44pxではなく56px角＋余白多めにして誤タップを避ける */
 .setbtn { width: 56px; height: 56px; border-radius: 28px; font-size: 20px;
-  margin: 4px 8px 4px 0; border: 2px solid var(--muted); }
+  margin: 4px 8px 4px 0; border: 2px solid var(--muted);
+  display: flex; align-items: center; justify-content: center; }
 .setbtn.done { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
 /* 自己ベスト更新時だけの金の一瞬の演出。金は「レア」に保つため他では使わない */
 .setbtn.pb { animation: pbFlourish .6s ease; border-color: var(--pb) !important;

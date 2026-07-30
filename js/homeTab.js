@@ -1,4 +1,4 @@
-import { $, onShow, showTab, toast, todayStr, esc } from './ui.js';
+import { $, onShow, showTab, toast, todayStr, esc, icon } from './ui.js';
 import {
   nextProgram, weeklyVolume, warnsBadmintonAfterLegs, weekKey, previousWeekKey,
   weekFeasibility, daysUntilDetraining
@@ -10,6 +10,12 @@ import { latestBody } from './body.js';
 import { analyzeInbody, OcrError } from './ocr.js';
 
 const PROGRAM_NAMES = { A: '胸・肩・三頭', B: '背中・二頭', C: '脚・腹' };
+
+/** PARTS の各部位に対応する assets/sprite.svg のトルソー上書きシンボルID */
+const PART_TORSO = {
+  chest: 'torso-chest', back: 'torso-back', shoulder: 'torso-shoulder',
+  leg: 'torso-leg', arm: 'torso-arm', abs: 'torso-abs'
+};
 
 let store;
 
@@ -34,7 +40,7 @@ export function renderHomeTab() {
   const body = latestBody(store.get('body'));
 
   $('#tab-home').innerHTML = `
-    <div class="card">
+    <div class="card card-primary">
       <div class="muted">今日やること</div>
       <div class="big">【${program}】${PROGRAM_NAMES[program]}</div>
       <button id="btnGoWorkout" class="primary" style="margin-top:8px;width:100%">トレーニングを始める</button>
@@ -48,9 +54,9 @@ export function renderHomeTab() {
     </div>
 
     ${!initial ? `
-    <div class="card">
+    <div class="card card-secondary">
       <div class="muted">連続週数</div>
-      <div class="big">🔥 ${streak} 週</div>
+      <div class="big">${icon('i-flame')} ${streak} 週</div>
     </div>` : ''}
 
     ${initial ? `
@@ -61,7 +67,7 @@ export function renderHomeTab() {
     </div>` : ''}
 
     ${!initial ? `
-    <div class="card">
+    <div class="card card-secondary">
       <div class="muted">筋肉が落ち始めるまで（目安）</div>
       <div class="big">${detrainingHeadline(detraining)}</div>
       <div class="muted">${detrainingSub(detraining)}</div>
@@ -73,14 +79,14 @@ export function renderHomeTab() {
         ${quickFoods.map((f) => `<button data-food="${f.id}">${esc(f.name)}</button>`).join('')}
       </div>
       <div class="chips" style="margin-top:8px">
-        <button id="btnBadminton">🏸 バドミントンを記録</button>
-        <button id="btnInbody">📏 体組成を記録</button>
+        <button id="btnBadminton">${icon('i-shuttle')} バドミントンを記録</button>
+        <button id="btnInbody">${icon('i-scale')} 体組成を記録</button>
       </div>
     </div>
 
-    <div class="card">
+    <div class="card card-secondary">
       <h2 style="margin-top:0">部位レベル</h2>
-      ${PARTS.map((p) => `<div class="muted">${PART_LABELS[p]} Lv${levelFromXp(game.xp[p] ?? 0)}</div>`).join('')}
+      ${renderTorsoRow(game.xp)}
       ${body ? `<div class="muted" style="margin-top:8px">最新の体組成 ${body.date}: 筋肉${body.muscle}kg / 体脂肪${body.fatPct}%</div>` : ''}
     </div>`;
 
@@ -93,6 +99,31 @@ export function renderHomeTab() {
   });
   $('#btnBadminton').addEventListener('click', recordBadminton);
   $('#btnInbody').addEventListener('click', recordBody);
+}
+
+/**
+ * 部位レベルをトルソー6体の行として描画する。数字を読まなくても、
+ * 鍛えていない部位（レベル0）が一目で沈んで見えることが目的なので、
+ * レベル0は overlay を --track・ラベルを --muted にして明確に暗く沈める。
+ * レベル1以上は overlay を --accent・ラベルを --text にする。
+ * torso-base は常に --text（sprite側で opacity を持たせた輪郭線）。
+ */
+function renderTorsoRow(xp) {
+  const items = PARTS.map((p) => {
+    const level = levelFromXp(xp[p] ?? 0);
+    const trained = level >= 1;
+    const overlayColor = trained ? 'var(--accent)' : 'var(--track)';
+    const labelColor = trained ? 'var(--text)' : 'var(--muted)';
+    return `
+      <div class="torso-item">
+        <div class="torso-box">
+          <svg class="torso-layer" style="color:var(--text)" aria-hidden="true"><use href="#torso-base"></use></svg>
+          <svg class="torso-layer" style="color:${overlayColor}" aria-hidden="true"><use href="#${PART_TORSO[p]}"></use></svg>
+        </div>
+        <div class="torso-label" style="color:${labelColor}">${PART_LABELS[p]} Lv${level}</div>
+      </div>`;
+  }).join('');
+  return `<div class="torso-row">${items}</div>`;
 }
 
 /**

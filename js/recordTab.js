@@ -1,4 +1,4 @@
-import { $, onShow, todayStr } from './ui.js';
+import { $, onShow, todayStr, icon } from './ui.js';
 import { weeklyVolume, weekKey, previousWeekKey, weekFeasibility } from './workout.js';
 import { bodySeries, bodyDiff, latestBody } from './body.js';
 import { radarData, BADGES } from './game.js';
@@ -50,7 +50,7 @@ export function renderRecordTab() {
         // game.js の checkBadges と同じガードを置き、壊れていても記録タブ全体を落とさない
         const ownedBadges = Array.isArray(game.badges) ? game.badges : [];
         const owned = ownedBadges.includes(b.id);
-        return `<div class="ex"><div class="ex-head"><span class="ex-name">${owned ? '🎖 ' + b.name : '🔒 ???'}</span></div>
+        return `<div class="ex"><div class="ex-head"><span class="ex-name">${owned ? icon('i-crest') + ' ' + b.name : icon('i-crest-locked') + ' ???'}</span></div>
           <div class="muted">${owned ? b.desc : '未解放'}</div></div>`;
       }).join('')}
     </div>`;
@@ -93,7 +93,7 @@ function weekSummary(weeks, feasibility) {
 }
 
 
-/** 直近8週間のカレンダー。💪ジム 🏸バド 😴休養 */
+/** 直近8週間のカレンダー。ジムはバーベル・バドミントンはシャトルのアイコン、休養は中点 */
 function renderCalendar(workouts, badminton) {
   const gymDates = new Set(workouts.map((w) => w.date));
   const badDates = new Set(badminton.map((b) => b.date));
@@ -103,7 +103,7 @@ function renderCalendar(workouts, badminton) {
     const d = new Date(today);
     d.setUTCDate(d.getUTCDate() - i);
     const key = d.toISOString().slice(0, 10);
-    const mark = gymDates.has(key) ? '💪' : badDates.has(key) ? '🏸' : '·';
+    const mark = gymDates.has(key) ? icon('i-barbell', 'icon-sm') : badDates.has(key) ? icon('i-shuttle', 'icon-sm') : '·';
     // data-date でタップ判定する(title属性はホバー用の補助表示として残す)。
     // 44px未満だと誤タップ元になるため、幅は12.5%でも縦方向のpaddingで
     // タップ領域を44px以上確保する。

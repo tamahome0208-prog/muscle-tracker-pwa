@@ -1,4 +1,4 @@
-import { $, onShow, toast, vibrate, todayStr, newId, esc } from './ui.js';
+import { $, onShow, toast, vibrate, todayStr, newId, esc, icon } from './ui.js';
 import { nextProgram, calcVolume, lastSetFor, isPB, updateBests, restorableSession, programStatus } from './workout.js';
 import { addWorkoutXp, checkBadges, BADGES, calcStreak } from './game.js';
 import { currentBodyweight } from './body.js';
@@ -37,7 +37,7 @@ export function startSession(date) {
     session = restored;
     return true;
   }
-  // 古い/壊れたセッションが残っていたら復元せず捨てる。次の✓で新しいセッションが
+  // 古い/壊れたセッションが残っていたら復元せず捨てる。次のセット記録で新しいセッションが
   // 上書きするので必須ではないが、ここで消しておけば storage 上にも古いデータが
   // 残り続けない。
   if (store.get('session').date) {
@@ -66,7 +66,7 @@ function confirmSameDayDuplicate(date, program) {
 }
 
 /** セット記録のたびに呼ぶ。書き込みに失敗しても session はメモリ上に残るので
- * その場のセット自体は失われない(次回の✓や終了時にまた保存を試みる)。 */
+ * その場のセット自体は失われない(次回のセット記録や終了時にまた保存を試みる)。 */
 function persistSession() {
   try {
     store.set('session', session);
@@ -162,7 +162,7 @@ function renderExercise(ex, workouts, bests) {
         <button data-act="r+">＋</button>
       </div>
       <div class="ex-ctrl">
-        ${Array.from({ length: ex.sets }, (_, i) => `<button class="setbtn${i < doneCount ? ' done' : ''}" data-act="set" data-index="${i}">✓</button>`).join('')}
+        ${Array.from({ length: ex.sets }, (_, i) => `<button class="setbtn${i < doneCount ? ' done' : ''}" data-act="set" data-index="${i}" aria-label="${esc(ex.name)} セット${i + 1}を記録">${icon('i-check')}</button>`).join('')}
       </div>
     </div>`;
 }
@@ -233,7 +233,7 @@ function recordSet(btn, exId, weight, reps) {
   if (isPB(bests, exId, weight, reps)) {
     const name = store.get('exercises').find((e) => e.id === exId)?.name ?? '';
     btn.classList.add('pb');
-    toast(`🏆 自己ベスト更新 ${name} ${weight}kg×${reps}`, 2200, 'pb');
+    toast(`自己ベスト更新 ${name} ${weight}kg×${reps}`, 2200, 'pb', 'i-crest');
     vibrate([40, 60, 40]);
   }
 
@@ -250,7 +250,7 @@ function updateVolume() {
 
 /**
  * #timer の生成と body への 'timer-active' クラス付与をまとめる。
- * このクラスが立っている間、CSS側で body の下側余白を広げて✓ボタンの列を
+ * このクラスが立っている間、CSS側で body の下側余白を広げてセットボタンの列を
  * タイマーバナーの上までスクロールし切れるようにする(css/style.css 参照)。
  * タイマー表示中は #timer 自体に pointer-events:none も付けているので、
  * 万一余白が足りない環境でもタップはタイマーではなくその下の要素に届く。
@@ -265,10 +265,10 @@ function startRestTimer() {
     document.body.appendChild(el);
   }
   document.body.classList.add('timer-active');
-  el.textContent = `⏱ ${left}`;
+  el.innerHTML = `${icon('i-clock')} ${left}`;
   timerId = setInterval(() => {
     left -= 1;
-    el.textContent = `⏱ ${left}`;
+    el.innerHTML = `${icon('i-clock')} ${left}`;
     if (left <= 0) {
       clearInterval(timerId);
       removeTimer();
@@ -333,7 +333,7 @@ function finishSession() {
 
   for (const id of earned) {
     const badge = BADGES.find((b) => b.id === id);
-    if (badge) toast(`🎖 称号解放「${badge.name}」`, 3000);
+    if (badge) toast(`称号解放「${badge.name}」`, 3000, '', 'i-crest');
   }
 
   clearInterval(timerId);

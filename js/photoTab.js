@@ -1,4 +1,4 @@
-import { $, onShow, toast, todayStr } from './ui.js';
+import { $, onShow, toast, todayStr, icon } from './ui.js';
 import { ANGLES, savePhoto, listPhotos, latestByAngle, firstByAngle, toUrl, isAvailable, deletePhoto } from './photos.js';
 import { BADGES, checkBadges, calcStreak } from './game.js';
 
@@ -32,8 +32,8 @@ export async function renderPhotoTab() {
       </div>
       <p class="muted">前回の写真を薄く重ねています。輪郭を合わせて撮ると比較できる写真になります。</p>
       <div class="chips">
-        <button id="btnShoot" class="primary">📷 撮影</button>
-        <button id="btnFile">🖼 ファイルから</button>
+        <button id="btnShoot" class="primary">${icon('i-camera')} 撮影</button>
+        <button id="btnFile">ファイルから</button>
       </div>
       <input type="file" id="filePicker" accept="image/*" class="hidden">
     </div>
@@ -212,7 +212,7 @@ function grantCompareBadge() {
   store.set('game', { ...game, badges: [...game.badges, ...earned] });
   for (const id of earned) {
     const badge = BADGES.find((b) => b.id === id);
-    if (badge) toast(`🎖 称号解放「${badge.name}」`, 3000);
+    if (badge) toast(`称号解放「${badge.name}」`, 3000, '', 'i-crest');
   }
 }
 

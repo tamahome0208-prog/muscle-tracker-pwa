@@ -123,14 +123,34 @@ function renderExercise(ex, workouts, bests) {
  * 2つのプログラムのセットが1つの記録に混ざって volume / 部位別XP が壊れるのを
  * 防ぐため、既存のセットは保持せず新規プログラムで空セッションから始める。
  * 「保持する」選択肢は意図的に用意しない。
+ *
+ * さらに、切り替え先のプログラムが今日すでに記録済みなら先に確認する。
+ * 例: Aを終えて自動でBに進んだ直後、忘れたセットを足すつもりで「A 今日」
+ * チップを押すと、そのまま終了して同じ日に2件目のA記録ができてしまう。
+ * 週の達成回数・gymCount・ストリークは記録数ではなく実施日数で数えるため実害は
+ * 抑えてあるが、無自覚に同日2件目を作ること自体は防ぎたいので、ここで先に
+ * 状況を名指しして確認する。
  */
 function switchProgram(program) {
   if (program === session.program) return;
+
+  const today = todayStr();
+  const alreadyLoggedToday = store.get('workouts')
+    .some((w) => w?.date === today && w.program === program);
+  if (alreadyLoggedToday) {
+    const ok = confirm(
+      `${program}は今日すでに記録済みです。もう一度${program}を記録すると、同じ日に2件登録されます` +
+      `（今週の達成回数などの数え方は日数なので二重には数えませんが、記録自体は増えます）。` +
+      `それでも${program}に切り替えますか？`
+    );
+    if (!ok) return;
+  }
+
   if (session.sets.length > 0) {
     const ok = confirm(`記録済みの${session.sets.length}セットは破棄されます。${program}に切り替えますか？`);
     if (!ok) return;
     clearInterval(timerId);
-    $('#timer')?.remove();
+    removeTimer();
   }
   session = { program, date: todayStr(), sets: [] };
   persistSession();
@@ -184,6 +204,13 @@ function updateVolume() {
   el.textContent = Math.round(calcVolume(session.sets, { exercises: store.get('exercises'), bodyweight }));
 }
 
+/**
+ * #timer の生成と body への 'timer-active' クラス付与をまとめる。
+ * このクラスが立っている間、CSS側で body の下側余白を広げて✓ボタンの列を
+ * タイマーバナーの上までスクロールし切れるようにする(css/style.css 参照)。
+ * タイマー表示中は #timer 自体に pointer-events:none も付けているので、
+ * 万一余白が足りない環境でもタップはタイマーではなくその下の要素に届く。
+ */
 function startRestTimer() {
   clearInterval(timerId);
   let left = REST_SECONDS;
@@ -193,16 +220,23 @@ function startRestTimer() {
     el.id = 'timer';
     document.body.appendChild(el);
   }
+  document.body.classList.add('timer-active');
   el.textContent = `⏱ ${left}`;
   timerId = setInterval(() => {
     left -= 1;
     el.textContent = `⏱ ${left}`;
     if (left <= 0) {
       clearInterval(timerId);
-      el.remove();
+      removeTimer();
       vibrate([200, 100, 200]);
     }
   }, 1000);
+}
+
+/** #timer を消し、body の 'timer-active' クラスも一緒に外す（startRestTimer 参照） */
+function removeTimer() {
+  $('#timer')?.remove();
+  document.body.classList.remove('timer-active');
 }
 
 function finishSession() {
@@ -259,7 +293,7 @@ function finishSession() {
   }
 
   clearInterval(timerId);
-  $('#timer')?.remove();
+  removeTimer();
   toast(`保存しました（総挙上量 ${Math.round(volume)}kg）`);
   session = null;
   // 終了して保存できたので、復元用に持っていた進行中セッションは消してよい。

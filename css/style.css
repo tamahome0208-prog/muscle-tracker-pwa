@@ -12,6 +12,11 @@ body {
   font-family: system-ui, -apple-system, "Noto Sans JP", sans-serif;
   padding-bottom: calc(64px + var(--safe-bottom));
 }
+/* 休憩タイマー表示中だけ下側余白を広げる。#timer はタブバーの上に浮くバナーで、
+   通常の64px余白の上にさらに約65px重なる。これが無いと最後の種目の✓ボタンの列を
+   スクロールし切ってもタイマーの下に隠れたままになり、下側のボタンがタップできない
+   （#timer 自体の pointer-events:none と合わせた二重の対策）。 */
+body.timer-active { padding-bottom: calc(150px + var(--safe-bottom)); }
 .hidden { display: none !important; }
 
 #statusBar { position: sticky; top: 0; z-index: 10; background: var(--panel);
@@ -96,11 +101,15 @@ button:active { transform: scale(.97); }
 #tabbar button span { display: block; font-size: 10px; }
 #tabbar button.active { color: var(--accent); }
 
-/* 休憩タイマー。セット間で見続けるものなので見逃しようがない大きさにする */
+/* 休憩タイマー。セット間で見続けるものなので見逃しようがない大きさにする。
+   これは純粋に情報表示であり何もタップさせる意図が無いので pointer-events:none にする:
+   375×812でスクロール末尾での実測で、最後の種目の✓ボタンの下側56pxのうち29pxが
+   このバナーの下に隠れて誤タップの原因になっていた。タップは常にその下の要素に届く
+   （body.timer-active による下側余白の追加と合わせた二重の対策）。 */
 #timer { position: fixed; left: 12px; right: 12px; bottom: calc(76px + var(--safe-bottom));
   background: var(--accent); color: var(--on-accent); font-weight: 800;
   font-size: 28px; text-align: center; padding: 14px; border-radius: 16px;
-  box-shadow: 0 4px 20px rgba(228, 87, 46, .5); z-index: 25;
+  box-shadow: 0 4px 20px rgba(228, 87, 46, .5); z-index: 25; pointer-events: none;
   font-variant-numeric: tabular-nums; animation: timerPulse 1.6s ease-in-out infinite; }
 
 @keyframes timerPulse {

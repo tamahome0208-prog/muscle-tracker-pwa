@@ -11,6 +11,8 @@ import {
   weekKey,
   restorableSession,
   programStatus,
+  weekFeasibility,
+  daysUntilDetraining,
   PROGRAMS
 } from '../js/workout.js';
 
@@ -342,4 +344,157 @@ test('programStatus: 今日実施していればdaysAgoは0', () => {
   const workouts = [{ date: '2026-07-29', program: 'A' }];
   const statuses = programStatus(workouts, '2026-07-29');
   assert.equal(statuses.find((s) => s.program === 'A').daysAgo, 0);
+});
+
+// --- weekFeasibility（今週の目標に対する達成可否） ---
+// 2026-07-27(月)〜2026-08-02(日) が 2026-W31。today='2026-07-29' は同じ週の水曜(index2)で
+// daysLeftInWeek = 7-2 = 5。
+
+test('weekFeasibility: 記録が無ければ0/3、まだ十分間に合う', () => {
+  const f = weekFeasibility([], '2026-07-29');
+  assert.deepEqual(f, { done: 0, remaining: 3, daysLeftInWeek: 5, stillPossible: true });
+});
+
+test('weekFeasibility: 今週1回なら残り2回', () => {
+  const workouts = [{ date: '2026-07-27', program: 'A' }];
+  const f = weekFeasibility(workouts, '2026-07-29');
+  assert.equal(f.done, 1);
+  assert.equal(f.remaining, 2);
+  assert.equal(f.stillPossible, true);
+});
+
+test('weekFeasibility: 今週2回なら残り1回', () => {
+  const workouts = [
+    { date: '2026-07-27', program: 'A' },
+    { date: '2026-07-28', program: 'B' }
+  ];
+  const f = weekFeasibility(workouts, '2026-07-29');
+  assert.equal(f.done, 2);
+  assert.equal(f.remaining, 1);
+  assert.equal(f.stillPossible, true);
+});
+
+test('weekFeasibility: 今週3回で目標達成、残り0', () => {
+  const workouts = [
+    { date: '2026-07-27', program: 'A' },
+    { date: '2026-07-28', program: 'B' },
+    { date: '2026-07-29', program: 'C' }
+  ];
+  const f = weekFeasibility(workouts, '2026-07-29');
+  assert.equal(f.done, 3);
+  assert.equal(f.remaining, 0);
+  assert.equal(f.stillPossible, true);
+});
+
+test('weekFeasibility: 今週4回でも残りは0未満にならない', () => {
+  const workouts = [
+    { date: '2026-07-27', program: 'A' },
+    { date: '2026-07-28', program: 'B' },
+    { date: '2026-07-29', program: 'C' },
+    { date: '2026-07-30', program: 'A' }
+  ];
+  const f = weekFeasibility(workouts, '2026-07-30');
+  assert.equal(f.done, 4);
+  assert.equal(f.remaining, 0);
+  assert.equal(f.stillPossible, true);
+});
+
+test('weekFeasibility: 境界（達成可否が切り替わる日） 残り2回・土曜はまだ間に合う', () => {
+  const workouts = [{ date: '2026-07-27', program: 'A' }]; // 今週1回、残り2回
+  const f = weekFeasibility(workouts, '2026-08-01'); // 土曜、daysLeftInWeek=2
+  assert.equal(f.remaining, 2);
+  assert.equal(f.daysLeftInWeek, 2);
+  assert.equal(f.stillPossible, true);
+});
+
+test('weekFeasibility: 境界（達成可否が切り替わる日） 残り2回・日曜はもう間に合わない', () => {
+  const workouts = [{ date: '2026-07-27', program: 'A' }]; // 今週1回、残り2回
+  const f = weekFeasibility(workouts, '2026-08-02'); // 日曜、daysLeftInWeek=1
+  assert.equal(f.remaining, 2);
+  assert.equal(f.daysLeftInWeek, 1);
+  assert.equal(f.stillPossible, false);
+});
+
+test('weekFeasibility: 月をまたぐ週でも同じ週として数える', () => {
+  const workouts = [{ date: '2026-07-31', program: 'A' }]; // 金（7月）
+  const f = weekFeasibility(workouts, '2026-08-01'); // 土（8月）同じ2026-W31
+  assert.equal(f.done, 1);
+  assert.equal(f.remaining, 2);
+});
+
+test('weekFeasibility: 年をまたぐ週でも同じ週として数える', () => {
+  const workouts = [{ date: '2026-12-31', program: 'A' }]; // 木（2026年）2026-W53
+  const f = weekFeasibility(workouts, '2027-01-01'); // 金（2027年）同じ2026-W53
+  assert.equal(f.done, 1);
+  assert.equal(f.remaining, 2);
+});
+
+test('weekFeasibility: 先週の記録は今週にカウントしない', () => {
+  const workouts = [{ date: '2026-07-20', program: 'A' }]; // 先週の月曜
+  const f = weekFeasibility(workouts, '2026-07-29');
+  assert.equal(f.done, 0);
+  assert.equal(f.remaining, 3);
+});
+
+test('weekFeasibility: 日付が欠損・不正な記録は例外を投げずに除外する', () => {
+  const workouts = [
+    { date: undefined, program: 'A' },
+    { date: '2026-7-9', program: 'B' }, // ゼロ埋めなし
+    { date: '2026-07-27', program: 'C' }
+  ];
+  assert.doesNotThrow(() => weekFeasibility(workouts, '2026-07-29'));
+  const f = weekFeasibility(workouts, '2026-07-29');
+  assert.equal(f.done, 1);
+});
+
+// --- daysUntilDetraining（最後のジムから目安14日までの残り） ---
+
+test('daysUntilDetraining: 記録が無ければ lastDate は null で overdue も false', () => {
+  const d = daysUntilDetraining([], '2026-07-29');
+  assert.deepEqual(d, { lastDate: null, daysSince: null, daysLeft: null, overdue: false });
+});
+
+test('daysUntilDetraining: 13日経過なら残り1日でoverdueではない', () => {
+  const workouts = [{ date: '2026-07-16', program: 'A' }];
+  const d = daysUntilDetraining(workouts, '2026-07-29');
+  assert.equal(d.daysSince, 13);
+  assert.equal(d.daysLeft, 1);
+  assert.equal(d.overdue, false);
+});
+
+test('daysUntilDetraining: 14日経過（目安ちょうど）は残り0だがoverdueではない', () => {
+  const workouts = [{ date: '2026-07-15', program: 'A' }];
+  const d = daysUntilDetraining(workouts, '2026-07-29');
+  assert.equal(d.daysSince, 14);
+  assert.equal(d.daysLeft, 0);
+  assert.equal(d.overdue, false);
+});
+
+test('daysUntilDetraining: 15日経過は残り0でoverdue', () => {
+  const workouts = [{ date: '2026-07-14', program: 'A' }];
+  const d = daysUntilDetraining(workouts, '2026-07-29');
+  assert.equal(d.daysSince, 15);
+  assert.equal(d.daysLeft, 0);
+  assert.equal(d.overdue, true);
+});
+
+test('daysUntilDetraining: 最新の記録を基準にする（配列順に依存しない）', () => {
+  const workouts = [
+    { date: '2026-07-14', program: 'A' },
+    { date: '2026-07-27', program: 'B' } // より新しい
+  ];
+  const d = daysUntilDetraining(workouts, '2026-07-29');
+  assert.equal(d.lastDate, '2026-07-27');
+  assert.equal(d.daysSince, 2);
+});
+
+test('daysUntilDetraining: 日付が欠損・不正な記録は例外を投げずに除外する', () => {
+  const workouts = [
+    { date: undefined, program: 'A' },
+    { date: '2026-7-9', program: 'B' }, // ゼロ埋めなし
+    { date: '2026-07-27', program: 'C' }
+  ];
+  assert.doesNotThrow(() => daysUntilDetraining(workouts, '2026-07-29'));
+  const d = daysUntilDetraining(workouts, '2026-07-29');
+  assert.equal(d.lastDate, '2026-07-27');
 });

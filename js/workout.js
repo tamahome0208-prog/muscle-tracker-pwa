@@ -191,6 +191,75 @@ export function restorableSession(stored, todayStr) {
   return { program: stored.program, date: stored.date, sets: stored.sets };
 }
 
+/**
+ * 今週（月曜始まり、weekKey と同じ週の切り方）が週 perWeek 回（既定3）の目標に対して
+ * まだ到達可能かどうかを判定する。「達成できなかった」を罰として見せるのではなく、
+ * 「あと何回・あと何日で間に合うか」という事実だけを見せるための土台。
+ *
+ * - done: 今週の有効な記録数（不正な日付は除外して数える。calcStreak と同じ数え方で、
+ *   同日複数回の記録もそれぞれ1回として数える）。
+ * - remaining: 目標に対する残り回数。0未満にはならない（達成済みなら0）。
+ * - daysLeftInWeek: 今日を含む今週の残り日数（月曜なら7、日曜なら1）。
+ * - stillPossible: remaining <= daysLeftInWeek。達成済み（remaining===0）なら
+ *   daysLeftInWeek の値によらず常に true になる。
+ *
+ * todayStr は calcStreak 等と同じ前提で、アプリ内部の信頼できる値（不正な形式なら
+ * weekKey が例外を投げる）。一方 workouts は storage / importAll 由来の信頼できない
+ * データなので、date が欠損・不正なレコードは黙って除外する。
+ */
+export function weekFeasibility(workouts, todayStr, perWeek = 3) {
+  const thisWeek = weekKey(todayStr);
+  const done = (workouts ?? []).filter((w) => {
+    if (typeof w?.date !== 'string' || !DATE_RE.test(w.date)) return false;
+    return weekKey(w.date) === thisWeek;
+  }).length;
+
+  const today = new Date(todayStr + 'T00:00:00Z');
+  const dayIndex = (today.getUTCDay() + 6) % 7; // 月=0 ... 日=6
+  const daysLeftInWeek = 7 - dayIndex;
+
+  const remaining = Math.max(0, perWeek - done);
+  const stillPossible = remaining <= daysLeftInWeek;
+
+  return { done, remaining, daysLeftInWeek, stillPossible };
+}
+
+/**
+ * 最後にジムへ行った日から、無トレーニングによる筋力低下が測定され始めるとされる
+ * 目安期間（既定14日）までの残り日数を返す。ペナルティではなく時計として扱うため、
+ * 期間を過ぎても何かを減点したりはしない。呼び出し側（UI）はこの目安を「事実」として
+ * ではなく「目安」として提示すること。
+ *
+ * - lastDate: 有効な日付を持つ記録の中で最も新しい日付。1件も無ければ null。
+ *   null のときは daysSince/daysLeft も意味を持たないため null を返し、overdue は false。
+ * - daysSince: 今日と lastDate の暦日差。
+ * - daysLeft: windowDays - daysSince。0未満にはならない（0を「目安に達した」の表現とし、
+ *   マイナス方向には伸ばさない。伸ばしても「もっと落ちている」という煽りにしかならない）。
+ * - overdue: daysSince が windowDays を「超えた」場合のみ true（等しいだけでは false。
+ *   ちょうど windowDays 日はまだ「目安に到達した」段階であり「過ぎた」わけではない）。
+ *
+ * workouts は storage / importAll 由来の信頼できないデータなので、date が欠損・不正な
+ * レコードは黙って除外する。todayStr は他の集計関数と同様、アプリ内部の信頼できる値。
+ */
+export function daysUntilDetraining(workouts, todayStr, windowDays = 14) {
+  let lastDate = null;
+  for (const w of workouts ?? []) {
+    if (typeof w?.date !== 'string' || !DATE_RE.test(w.date)) continue;
+    if (lastDate === null || w.date > lastDate) lastDate = w.date;
+  }
+  if (lastDate === null) {
+    return { lastDate: null, daysSince: null, daysLeft: null, overdue: false };
+  }
+
+  const today = new Date(todayStr + 'T00:00:00Z');
+  const last = new Date(lastDate + 'T00:00:00Z');
+  const daysSince = Math.round((today - last) / (24 * 3600 * 1000));
+  const daysLeft = Math.max(0, windowDays - daysSince);
+  const overdue = daysSince > windowDays;
+
+  return { lastDate, daysSince, daysLeft, overdue };
+}
+
 /** 脚の日（C）の翌日にバドミントンを入れようとしていれば true */
 export function warnsBadmintonAfterLegs(workouts, badmintonDate) {
   const target = new Date(badmintonDate + 'T00:00:00Z');

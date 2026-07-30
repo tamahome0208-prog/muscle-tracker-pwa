@@ -1,5 +1,8 @@
 import { $, onShow, showTab, toast, todayStr, esc } from './ui.js';
-import { nextProgram, weeklyVolume, warnsBadmintonAfterLegs, weekKey, previousWeekKey } from './workout.js';
+import {
+  nextProgram, weeklyVolume, warnsBadmintonAfterLegs, weekKey, previousWeekKey,
+  weekFeasibility, daysUntilDetraining
+} from './workout.js';
 import { calcStreak, isInitialPhase, initialPhaseStatus, levelFromXp, PART_LABELS, PARTS } from './game.js';
 import { sortFoodsByUse } from './nutrition.js';
 import { addFoodById } from './mealTab.js';
@@ -25,6 +28,8 @@ export function renderHomeTab() {
   const weeks = weeklyVolume(workouts);
   const initial = isInitialPhase(profile.startDate, today);
   const status = initialPhaseStatus(workouts, store.get('meals'), today);
+  const feasibility = weekFeasibility(workouts, today);
+  const detraining = daysUntilDetraining(workouts, today);
   const quickFoods = sortFoodsByUse(store.get('foods')).slice(0, 6);
   const body = latestBody(store.get('body'));
 
@@ -35,6 +40,19 @@ export function renderHomeTab() {
       <button id="btnGoWorkout" class="primary" style="margin-top:8px;width:100%">トレーニングを始める</button>
     </div>
 
+    ${!initial ? `
+    <div class="card">
+      <div class="muted">連続週数</div>
+      <div class="big">🔥 ${streak} 週</div>
+      <div class="muted">今週の総挙上量 ${thisWeekVolume(weeks, today)} kg ${weekDiff(weeks)}</div>
+    </div>` : ''}
+
+    <div class="card">
+      <div class="muted">今週の達成状況</div>
+      <div class="big${feasibility.remaining === 0 ? ' up' : ''}">${feasibilityHeadline(feasibility)}</div>
+      <div class="muted">${feasibilitySub(feasibility)}</div>
+    </div>
+
     ${initial ? `
     <div class="card">
       <h2 style="margin-top:0">最初の4週間</h2>
@@ -43,11 +61,12 @@ export function renderHomeTab() {
       <div>朝プロテイン <b>${status.proteinMornings}</b> 日 / 今週</div>
     </div>` : ''}
 
+    ${!initial ? `
     <div class="card">
-      <div class="muted">連続週数</div>
-      <div class="big">🔥 ${streak} 週</div>
-      <div class="muted">今週の総挙上量 ${thisWeekVolume(weeks, today)} kg ${weekDiff(weeks)}</div>
-    </div>
+      <div class="muted">筋肉が落ち始めるまで（目安）</div>
+      <div class="big">${detrainingHeadline(detraining)}</div>
+      <div class="muted">${detrainingSub(detraining)}</div>
+    </div>` : ''}
 
     <div class="card">
       <h2 style="margin-top:0">クイック記録</h2>
@@ -75,6 +94,40 @@ export function renderHomeTab() {
   });
   $('#btnBadminton').addEventListener('click', recordBadminton);
   $('#btnInbody').addEventListener('click', recordBody);
+}
+
+/**
+ * 週の達成可否（weekFeasibility の結果）の見出し。
+ * これは「失敗」を見せる場所ではないので、達成不可能になったときも
+ * 「今週は◯回で締め」という区切りの言い方にし、責める言葉は使わない。
+ */
+function feasibilityHeadline(f) {
+  if (f.remaining === 0) return `今週${f.done}回 達成`;
+  if (f.stillPossible) return `残り${f.remaining}回`;
+  return `今週は${f.done}回で締め`;
+}
+
+function feasibilitySub(f) {
+  if (f.remaining === 0) return '今週の目標はクリアしました';
+  if (f.stillPossible) return `今週あと${f.daysLeftInWeek}日 · 間に合う`;
+  return '来週から';
+}
+
+/**
+ * 検出開始カウントダウン（daysUntilDetraining の結果）の見出し。
+ * ペナルティではなく時計として見せるため、0またはoverdueのときも
+ * 「今すぐ取り返せ」のような煽りではなく、次の一歩を促すだけの言い方にする。
+ */
+function detrainingHeadline(d) {
+  if (d.lastDate === null) return 'まだ記録がありません';
+  if (d.daysLeft > 0) return `あと${d.daysLeft}日`;
+  return '2週間空いています';
+}
+
+function detrainingSub(d) {
+  if (d.lastDate === null) return 'トレーニングを始めましょう';
+  if (d.daysLeft > 0) return `最後にジムへ行ってから${d.daysSince}日（14日は目安です）`;
+  return '軽めでいいので一度行く';
 }
 
 function thisWeekVolume(weeks, today) {

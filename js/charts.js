@@ -8,14 +8,14 @@ function draw(canvasId, config) {
   return chart;
 }
 
-const COLORS = { accent: '#40e8ff', muscle: '#4ade80', fat: '#ff5e6c', weight: '#8b95a8' };
+const COLORS = { accent: '#e4572e', muscle: '#4ade80', fat: '#ff5e6c', weight: '#a8a29b' };
 
 const BASE_OPTIONS = {
   responsive: true,
-  plugins: { legend: { labels: { color: '#e8ecf4' } } },
+  plugins: { legend: { labels: { color: '#f5f2ee' } } },
   scales: {
-    x: { ticks: { color: '#8b95a8' }, grid: { color: '#262c38' } },
-    y: { ticks: { color: '#8b95a8' }, grid: { color: '#262c38' } }
+    x: { ticks: { color: '#a8a29b' }, grid: { color: '#26262b' } },
+    y: { ticks: { color: '#a8a29b' }, grid: { color: '#26262b' } }
   }
 };
 
@@ -45,7 +45,7 @@ export function drawBodyChart(canvasId, series) {
       ...BASE_OPTIONS,
       scales: {
         ...BASE_OPTIONS.scales,
-        y1: { position: 'right', ticks: { color: '#8b95a8' }, grid: { display: false } }
+        y1: { position: 'right', ticks: { color: '#a8a29b' }, grid: { display: false } }
       }
     }
   });
@@ -60,15 +60,15 @@ export function drawRadarChart(canvasId, radar) {
         label: '部位レベル',
         data: radar.map((r) => r.level),
         borderColor: COLORS.accent,
-        backgroundColor: 'rgba(64,232,255,.2)'
+        backgroundColor: 'rgba(228,87,46,.2)'
       }]
     },
     options: {
       responsive: true,
-      plugins: { legend: { labels: { color: '#e8ecf4' } } },
+      plugins: { legend: { labels: { color: '#f5f2ee' } } },
       scales: { r: {
-        angleLines: { color: '#262c38' }, grid: { color: '#262c38' },
-        pointLabels: { color: '#e8ecf4' }, ticks: { color: '#8b95a8', backdropColor: 'transparent' },
+        angleLines: { color: '#26262b' }, grid: { color: '#26262b' },
+        pointLabels: { color: '#f5f2ee' }, ticks: { color: '#a8a29b', backdropColor: 'transparent' },
         beginAtZero: true
       } }
     }

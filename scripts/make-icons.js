@@ -2,8 +2,8 @@
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { deflateSync } from 'node:zlib';
 
-const BG = [15, 17, 21];      // --bg #0f1115
-const FG = [64, 232, 255];    // --accent #40e8ff
+const BG = [13, 13, 15];      // --bg #0d0d0f
+const FG = [228, 87, 46];     // --accent #e4572e
 
 const CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
   let c = n;

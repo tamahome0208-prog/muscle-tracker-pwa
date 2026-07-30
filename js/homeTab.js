@@ -215,10 +215,13 @@ async function recordBody() {
     values = await readInbodyPhoto();
   }
   if (!values) {
-    values = promptBodyValues();
+    openBodyForm(saveBodyValues);
+    return;
   }
-  if (!values) return;
+  saveBodyValues(values);
+}
 
+function saveBodyValues(values) {
   try {
     store.set('body', [...store.get('body'), { date: todayStr(), ...values, source: 'inbody' }]);
   } catch {
@@ -255,13 +258,41 @@ function readInbodyPhoto() {
   });
 }
 
-function promptBodyValues() {
-  const weight = Number(prompt('体重(kg)', '60'));
-  const muscle = Number(prompt('筋肉量(kg)', '45'));
-  const fatPct = Number(prompt('体脂肪率(%)', '20'));
-  if ([weight, muscle, fatPct].some((n) => Number.isNaN(n) || n <= 0)) {
-    toast('数値が読めませんでした');
-    return null;
-  }
-  return { weight, muscle, fatPct };
+/**
+ * 体重・筋肉量・体脂肪率の3値を1画面で入力するインラインフォーム。
+ * OSのprompt()を3連続出す方式（旧promptBodyValues）は、汗ばんだ手で立ったまま
+ * 操作している最中にフォーカスが途中で外れると、3つ目まで進んでから
+ * 入力し直しになっていた。その場に留まったまま3項目を見渡して直せる
+ * カードに置き換える。
+ * 3項目すべてが正の有限数でなければ保存しない(旧実装と同じ検証: body.js は
+ * 欠損値を0扱いするため、1項目だけ欠けると差分が実際の値と大きくずれる)。
+ */
+function openBodyForm(onSave) {
+  const dialog = document.createElement('div');
+  dialog.className = 'card';
+  dialog.innerHTML = `
+    <h2 style="margin-top:0">体組成を記録</h2>
+    <div class="ex-ctrl">体重 <input type="number" inputmode="decimal" id="bfWeight" value="60" style="width:90px">kg</div>
+    <div class="ex-ctrl">筋肉量 <input type="number" inputmode="decimal" id="bfMuscle" value="45" style="width:90px">kg</div>
+    <div class="ex-ctrl">体脂肪率 <input type="number" inputmode="decimal" id="bfFat" value="20" style="width:90px">%</div>
+    <div class="chips">
+      <button id="bfSave" class="primary">保存</button>
+      <button id="bfCancel">やめる</button>
+    </div>`;
+  $('#tab-home').prepend(dialog);
+
+  // このダイアログは開くたびに新しく作る使い捨てのDOMなので addEventListener でよい
+  // (onclick代入が必要なのは再描画をまたいで生き続けるコンテナだけ)。
+  dialog.querySelector('#bfCancel').addEventListener('click', () => dialog.remove());
+  dialog.querySelector('#bfSave').addEventListener('click', () => {
+    const weight = Number(dialog.querySelector('#bfWeight').value);
+    const muscle = Number(dialog.querySelector('#bfMuscle').value);
+    const fatPct = Number(dialog.querySelector('#bfFat').value);
+    if ([weight, muscle, fatPct].some((n) => !Number.isFinite(n) || n <= 0)) {
+      toast('数値が読めませんでした');
+      return;
+    }
+    dialog.remove();
+    onSave({ weight, muscle, fatPct });
+  });
 }

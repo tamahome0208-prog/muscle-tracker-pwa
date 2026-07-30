@@ -161,22 +161,57 @@ export function renderMealTab() {
   }
 }
 
+/**
+ * 品目名・カロリー・タンパク質の3値を1画面で入力するインラインフォーム。
+ * 汗ばんだ手で立ったまま操作する前提では、OSのprompt()を3連続で出す方式は
+ * フォーカスが途中で外れると入力し直しになる（3つ目までいって初めて気付く）。
+ * その場に留まったまま全項目を見渡して直せるカードに置き換える。
+ *
+ * 入力はここでは esc() しない: innerHTML に書き戻すのは自分自身の固定マークアップ
+ * だけで、ユーザーが打った文字列は .value を読み取って呼び出し側に渡すだけ
+ * （esc() が必要なのは innerHTML に注入する時点であり、ここでは発生しない）。
+ * onSave はレコードの組み立てと保存を呼び出し側の責務として残す(mealTab.js内の
+ * 通常の手入力と、未登録バーコードのマイメニュー登録とで保存先が異なるため)。
+ */
+function openItemForm({ title, nameLabel = '品目名', onSave }) {
+  const dialog = document.createElement('div');
+  dialog.className = 'card';
+  dialog.innerHTML = `
+    <h2 style="margin-top:0">${esc(title)}</h2>
+    <div class="ex-ctrl"><input type="text" id="ifName" placeholder="${esc(nameLabel)}" style="flex:1"></div>
+    <div class="ex-ctrl">カロリー <input type="number" inputmode="numeric" id="ifKcal" value="0" style="width:90px">kcal</div>
+    <div class="ex-ctrl">タンパク質 <input type="number" inputmode="decimal" id="ifProtein" value="0" style="width:90px">g</div>
+    <div class="chips">
+      <button id="ifSave" class="primary">保存</button>
+      <button id="ifCancel">やめる</button>
+    </div>`;
+  $('#tab-meal').prepend(dialog);
+
+  // このダイアログは開くたびに新しく作る使い捨てのDOMなので addEventListener でよい
+  // (onclick代入が必要なのは再描画をまたいで生き続けるコンテナだけ)。
+  dialog.querySelector('#ifCancel').addEventListener('click', () => dialog.remove());
+  dialog.querySelector('#ifSave').addEventListener('click', () => {
+    const name = dialog.querySelector('#ifName').value.trim();
+    if (!name) {
+      toast('品目名を入力してください');
+      return;
+    }
+    const kcal = Number(dialog.querySelector('#ifKcal').value);
+    const protein = Number(dialog.querySelector('#ifProtein').value);
+    if (Number.isNaN(kcal) || Number.isNaN(protein)) {
+      toast('数値が読めませんでした');
+      return;
+    }
+    dialog.remove();
+    onSave({ name, kcal, protein });
+  });
+}
+
 function openManualDialog() {
-  const name = prompt('品目名');
-  if (!name) return;
-  // prompt はキャンセルで null を返す。Number(null) は 0 になり「キャンセル＝0kcalで記録」
-  // という意図しない挙動になるため、null は数値変換する前に中断として扱う。
-  const kcalRaw = prompt('カロリー(kcal)', '0');
-  if (kcalRaw === null) return;
-  const proteinRaw = prompt('タンパク質(g)', '0');
-  if (proteinRaw === null) return;
-  const kcal = Number(kcalRaw);
-  const protein = Number(proteinRaw);
-  if (Number.isNaN(kcal) || Number.isNaN(protein)) {
-    toast('数値が読めませんでした');
-    return;
-  }
-  addItems([{ name, kcal, protein }], 'manual');
+  openItemForm({
+    title: '手入力',
+    onSave: ({ name, kcal, protein }) => addItems([{ name, kcal, protein }], 'manual')
+  });
 }
 
 /** バーコードを読み、未知の商品は1回だけ手入力してマイメニューに育てる */
@@ -218,21 +253,15 @@ async function scanBarcode() {
     return;
   }
 
-  const name = prompt(`未登録の商品です（${jan}）\n品名を入力すると次回から自動登録されます`);
-  if (!name) return;
-  const kcalRaw = prompt('カロリー(kcal)', '0');
-  if (kcalRaw === null) return;
-  const proteinRaw = prompt('タンパク質(g)', '0');
-  if (proteinRaw === null) return;
-  const kcal = Number(kcalRaw);
-  const protein = Number(proteinRaw);
-  if (Number.isNaN(kcal) || Number.isNaN(protein)) {
-    toast('数値が読めませんでした');
-    return;
-  }
-  const food = { id: `jan_${jan}`, jan, name, unit: '個', kcal, protein, useCount: 0 };
-  store.set('foods', [...store.get('foods'), food]);
-  addFoodById(food.id);
+  openItemForm({
+    title: `未登録の商品です（${jan}）`,
+    nameLabel: '品名（次回から自動登録されます）',
+    onSave: ({ name, kcal, protein }) => {
+      const food = { id: `jan_${jan}`, jan, name, unit: '個', kcal, protein, useCount: 0 };
+      store.set('foods', [...store.get('foods'), food]);
+      addFoodById(food.id);
+    }
+  });
 }
 
 /** 写真をGeminiに送って品目を推定し、必ず確認画面を挟んでから保存する */
@@ -271,9 +300,9 @@ function confirmItems(items, source) {
       <div class="ex">
         <label><input type="checkbox" data-pick="${idx}" checked> ${esc(i.name)}</label>
         <div class="ex-ctrl">
-          <input type="number" data-kcal="${idx}" value="${i.kcal}" style="width:80px"> kcal
-          <input type="number" data-protein="${idx}" value="${i.protein}" style="width:70px"> g
-          ${Number(i.alcoholMl) > 0 ? `<input type="number" data-alcohol="${idx}" value="${i.alcoholMl}" style="width:70px"> mL` : ''}
+          <input type="number" inputmode="numeric" data-kcal="${idx}" value="${i.kcal}" style="width:80px"> kcal
+          <input type="number" inputmode="decimal" data-protein="${idx}" value="${i.protein}" style="width:70px"> g
+          ${Number(i.alcoholMl) > 0 ? `<input type="number" inputmode="numeric" data-alcohol="${idx}" value="${i.alcoholMl}" style="width:70px"> mL` : ''}
         </div>
       </div>`).join('')}
     <div class="chips">

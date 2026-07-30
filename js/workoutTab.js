@@ -144,7 +144,8 @@ function renderExercise(ex, workouts, bests) {
   const weight = latestThisSession?.weight ?? last?.weight ?? ex.defaultWeight;
   const reps = latestThisSession?.reps ?? last?.reps ?? ex.defaultReps;
   const best = bests[ex.id];
-  const hint = best ? `⚡ ${best.weight}kg×${best.reps}を超えると自己ベスト` : '';
+  // 絵文字は使わない。金の文字色(.pb-hint)だけで「自己ベストが懸かっている」ことは伝わる
+  const hint = best ? `${best.weight}kg×${best.reps} を超えると自己ベスト` : '';
 
   return `
     <div class="ex" data-ex="${ex.id}" data-step="${ex.step}">

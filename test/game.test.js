@@ -52,6 +52,46 @@ test('未知の種目IDは無視する', () => {
   assert.equal(Object.values(xp).reduce((a, b) => a + b, 0), 0);
 });
 
+const LOAD_EXERCISES = [
+  { id: 'chin_assist', part: 'back', load: 'assist' },
+  { id: 'ab_coaster', part: 'abs', load: 'bodyweight' },
+  { id: 'seated_row', part: 'back', load: 'external' }
+];
+
+test('bodyweight を渡すとアシスト/自重種目にもXPが付く', () => {
+  const workout = {
+    date: '2026-07-29', program: 'B',
+    sets: [
+      { exId: 'chin_assist', weight: -40, reps: 8 }, // (60-40)*8=160
+      { exId: 'ab_coaster', weight: 0, reps: 15 }    // 60*15=900
+    ]
+  };
+  const xp = addWorkoutXp({ chest: 0, back: 0, shoulder: 0, leg: 0, arm: 0, abs: 0 }, workout, LOAD_EXERCISES, 60);
+  assert.equal(xp.back, 16);  // 160/10
+  assert.equal(xp.abs, 90);   // 900/10
+});
+
+test('bodyweight を省略すると従来どおりアシスト/自重種目は0のまま', () => {
+  const workout = {
+    date: '2026-07-29', program: 'B',
+    sets: [
+      { exId: 'chin_assist', weight: -40, reps: 8 },
+      { exId: 'ab_coaster', weight: 0, reps: 15 }
+    ]
+  };
+  const xp = addWorkoutXp({ chest: 0, back: 0, shoulder: 0, leg: 0, arm: 0, abs: 0 }, workout, LOAD_EXERCISES);
+  assert.equal(xp.back, 0);
+  assert.equal(xp.abs, 0);
+});
+
+test('bodyweight を渡しても external 種目のXPは変わらない', () => {
+  const workout = { date: '2026-07-29', program: 'B', sets: [{ exId: 'seated_row', weight: 30, reps: 10 }] };
+  const withBw = addWorkoutXp({ chest: 0, back: 0, shoulder: 0, leg: 0, arm: 0, abs: 0 }, workout, LOAD_EXERCISES, 60);
+  const withoutBw = addWorkoutXp({ chest: 0, back: 0, shoulder: 0, leg: 0, arm: 0, abs: 0 }, workout, LOAD_EXERCISES);
+  assert.equal(withBw.back, withoutBw.back);
+  assert.equal(withBw.back, 30);
+});
+
 test('レーダー用データは6部位すべてのレベルを返す', () => {
   const data = radarData({ chest: 400, back: 900, shoulder: 0, leg: 100, arm: 0, abs: 0 });
   assert.equal(data.length, 6);

@@ -32,3 +32,10 @@ test('idが重複していない', () => {
   const ids = exercises.map((e) => e.id);
   assert.equal(new Set(ids).size, ids.length);
 });
+
+test('全種目に有効なloadがある（external/assist/bodyweightのいずれか）', () => {
+  const LOADS = ['external', 'assist', 'bodyweight'];
+  for (const e of exercises) {
+    assert.ok(LOADS.includes(e.load), `loadが不正: ${e.id} (${e.load})`);
+  }
+});

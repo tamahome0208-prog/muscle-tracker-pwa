@@ -16,6 +16,8 @@ export function renderSettingsTab() {
     <div class="card">
       <h2 style="margin-top:0">目標</h2>
       <div class="ex-ctrl">身長 <input type="number" id="tHeight" value="${profile.height}" style="width:80px">cm</div>
+      <div class="ex-ctrl">体重 <input type="number" id="tWeight" value="${profile.weight}" style="width:80px">kg</div>
+      <p class="muted">この体重はInBody記録が無いときのフォールバックです。InBody記録があれば常にそちらの最新値を優先して総挙上量・XPを計算します。</p>
       <div class="ex-ctrl">タンパク質 <input type="number" id="tProtein" value="${t.protein}" style="width:80px">g</div>
       <div class="ex-ctrl">カロリー下限 <input type="number" id="tKcalMin" value="${t.kcalMin}" style="width:90px"></div>
       <div class="ex-ctrl">カロリー上限 <input type="number" id="tKcalMax" value="${t.kcalMax}" style="width:90px"></div>
@@ -46,6 +48,7 @@ export function renderSettingsTab() {
 
   $('#btnSaveTargets').addEventListener('click', () => {
     const height = Number($('#tHeight').value);
+    const weight = Number($('#tWeight').value);
     const protein = Number($('#tProtein').value);
     const kcalMin = Number($('#tKcalMin').value);
     const kcalMax = Number($('#tKcalMax').value);
@@ -56,7 +59,7 @@ export function renderSettingsTab() {
     // 項目を「警告なし」として扱う。このユーザーはカロリーを削りたい衝動を
     // 自覚しているため、空欄/0での保存は警告を恒久的に無効化する抜け道になる。
     for (const [label, v] of [
-      ['身長', height], ['タンパク質目標', protein],
+      ['身長', height], ['体重', weight], ['タンパク質目標', protein],
       ['カロリー下限', kcalMin], ['カロリー上限', kcalMax], ['警告ライン', kcalFloor]
     ]) {
       if (!Number.isFinite(v) || v <= 0) {
@@ -79,7 +82,7 @@ export function renderSettingsTab() {
       return;
     }
 
-    store.set('profile', { ...profile, height, targets: { protein, kcalMin, kcalMax, kcalFloor, alcoholMl } });
+    store.set('profile', { ...profile, height, weight, targets: { protein, kcalMin, kcalMax, kcalFloor, alcoholMl } });
     toast('目標を保存しました');
   });
 

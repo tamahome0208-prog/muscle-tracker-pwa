@@ -25,6 +25,18 @@ export function latestBody(body) {
   return s.length ? s[s.length - 1] : null;
 }
 
+/**
+ * 体重計算(js/workout.js の calcVolume, js/game.js の addWorkoutXp)に渡す
+ * 「今の体重」を決める。優先順位: 最新のInBody記録 > profile.weight > 0。
+ * latestBody と同じ「壊れたレコードは無視する」方針を再利用する（ロジックの重複を避ける）。
+ */
+export function currentBodyweight(body, profile) {
+  const latest = latestBody(body);
+  if (latest) return toNum(latest.weight);
+  const profileWeight = toNum(profile?.weight);
+  return profileWeight > 0 ? profileWeight : 0;
+}
+
 /** 基準日以降の最初の記録と最新記録の差分。sinceを省略すると全期間 */
 export function bodyDiff(body, since = null) {
   const s = sorted(body).filter((b) => (since ? b.date >= since : true));

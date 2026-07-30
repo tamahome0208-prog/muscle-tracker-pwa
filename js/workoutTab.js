@@ -1,6 +1,7 @@
 import { $, onShow, toast, vibrate, todayStr, newId, esc } from './ui.js';
 import { nextProgram, calcVolume, lastSetFor, isPB, updateBests, restorableSession } from './workout.js';
 import { addWorkoutXp, checkBadges, BADGES, calcStreak } from './game.js';
+import { currentBodyweight } from './body.js';
 
 const PROGRAM_NAMES = { A: '胸・肩・三頭', B: '背中・二頭', C: '脚・腹' };
 const REST_SECONDS = 90;
@@ -137,7 +138,9 @@ function recordSet(btn, exId, weight, reps) {
 
 function updateVolume() {
   const el = $('#sessionVolume');
-  if (el) el.textContent = Math.round(calcVolume(session.sets));
+  if (!el) return;
+  const bodyweight = currentBodyweight(store.get('body'), store.get('profile'));
+  el.textContent = Math.round(calcVolume(session.sets, { exercises: store.get('exercises'), bodyweight }));
 }
 
 function startRestTimer() {
@@ -167,7 +170,9 @@ function finishSession() {
     return;
   }
   const workouts = store.get('workouts');
-  const volume = calcVolume(session.sets);
+  const exercises = store.get('exercises');
+  const bodyweight = currentBodyweight(store.get('body'), store.get('profile'));
+  const volume = calcVolume(session.sets, { exercises, bodyweight });
   workouts.push({
     id: newId('w'),
     date: session.date,
@@ -189,7 +194,7 @@ function finishSession() {
   const game = store.get('game');
   let bests = game.bests;
   for (const s of session.sets) bests = updateBests(bests, s.exId, s.weight, s.reps, session.date);
-  const xp = addWorkoutXp(game.xp, { sets: session.sets }, store.get('exercises'));
+  const xp = addWorkoutXp(game.xp, { sets: session.sets }, exercises, bodyweight);
   const streak = calcStreak(workouts, todayStr());
 
   const earned = checkBadges({

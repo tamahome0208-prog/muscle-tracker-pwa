@@ -62,16 +62,35 @@ export function nextProgram(workouts) {
 }
 
 /**
- * 総挙上量 = Σ(重量 × 回数)。補助重量（負値）と自重（0）は0として扱う。
+ * 総挙上量 = Σ(重量 × 回数)。
  * weight/reps が数値化できない値（undefined など）でも NaN を伝播させず0として扱う
  * （防御的丸め）。NaN が混入すると reduce の結果・週合計・XP計算まで汚染され、
  * さらに JSON.stringify(NaN) は null になるため localStorage に null として永続化され
  * 以降の計算が恒久的に壊れる。
+ *
+ * context を省略した場合は従来どおり: 補助重量（負値）と自重（0）はそのまま
+ * Math.max(0, weight) * reps で0になる。既存の呼び出し側・テストの挙動は変えない。
+ *
+ * context = { exercises, bodyweight } を渡すと種目の load に応じて体重を加味する:
+ *  - 'external'（未知のexId・context省略時も含む） → Math.max(0, weight) * reps
+ *  - 'assist' → Math.max(0, bodyweight + weight) * reps
+ *      （weightは負の補助重量。60kgの人が-40kg補助なら実効負荷20kg）
+ *  - 'bodyweight' → (bodyweight + Math.max(0, weight)) * reps
+ *      （通常weightは0。外部負荷を足した場合はそれも加算する）
+ * bodyweight が数値化できない/不正な場合は0として扱い、NaNではなく
+ * 従来どおりの挙動に緩やかに劣化させる。
  */
-export function calcVolume(sets) {
+export function calcVolume(sets, context) {
+  const exMap = context ? new Map(context.exercises?.map((e) => [e.id, e]) ?? []) : null;
+  const bodyweight = context ? (Number(context.bodyweight) || 0) : 0;
+
   return sets.reduce((sum, s) => {
     const w = Number(s.weight) || 0;
     const r = Number(s.reps) || 0;
+    const load = exMap?.get(s.exId)?.load;
+
+    if (load === 'assist') return sum + Math.max(0, bodyweight + w) * r;
+    if (load === 'bodyweight') return sum + (bodyweight + Math.max(0, w)) * r;
     return sum + Math.max(0, w) * r;
   }, 0);
 }

@@ -29,14 +29,20 @@ export function levelFromXp(xp) {
  * 見るガードだと NaN はそのまま伝播し、文字列は `+` で連結されてしまう
  * （例: 'oops' + 35 === 'oops35'）。ここで0に丸めることで、過去に紛れ込んだ
  * 壊れた値からも次回の加算で回復できるようにしている。
+ *
+ * bodyweight は省略可能（js/workout.js の calcVolume と同じ設計）。省略時は
+ * 従来どおり calcVolume([set]) が体重を加味しない値を返すため、既存の
+ * 呼び出し側・テストの挙動は変えない。渡すとアシスト/自重種目にも体重を
+ * 加味した実効挙上量からXPが計算され、leg/abs/back 等が0のまま止まらなくなる。
  */
-export function addWorkoutXp(xpMap, workout, exercises) {
+export function addWorkoutXp(xpMap, workout, exercises, bodyweight) {
   const partOf = new Map(exercises.map((e) => [e.id, e.part]));
   const next = { ...xpMap };
+  const context = bodyweight === undefined ? undefined : { exercises, bodyweight };
   for (const set of workout.sets ?? []) {
     const part = partOf.get(set.exId);
     if (!part || !PARTS.includes(part)) continue;
-    next[part] = toNum(next[part]) + calcVolume([set]) / 10;
+    next[part] = toNum(next[part]) + calcVolume([set], context) / 10;
   }
   return next;
 }

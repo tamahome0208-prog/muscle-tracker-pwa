@@ -64,6 +64,51 @@ test('calcVolume は不正な値を0として扱いNaNを伝播させない', ()
   assert.equal(calcVolume(sets), 350);
 });
 
+const LOAD_EXERCISES = [
+  { id: 'chin_assist', load: 'assist' },
+  { id: 'dip_assist', load: 'assist' },
+  { id: 'ab_coaster', load: 'bodyweight' },
+  { id: 'back_extension', load: 'bodyweight' },
+  { id: 'pec_fly', load: 'external' }
+];
+
+test('context ありで assist 種目は 体重+補助重量(負値) を実効負荷にする', () => {
+  const sets = [{ exId: 'chin_assist', weight: -40, reps: 8 }];
+  assert.equal(calcVolume(sets, { exercises: LOAD_EXERCISES, bodyweight: 60 }), (60 - 40) * 8);
+});
+
+test('context ありで bodyweight 種目は 体重×回数 になる', () => {
+  const sets = [{ exId: 'ab_coaster', weight: 0, reps: 15 }];
+  assert.equal(calcVolume(sets, { exercises: LOAD_EXERCISES, bodyweight: 60 }), 60 * 15);
+});
+
+test('context ありで bodyweight 種目に外部負荷を足した場合は加算する', () => {
+  const sets = [{ exId: 'back_extension', weight: 10, reps: 12 }];
+  assert.equal(calcVolume(sets, { exercises: LOAD_EXERCISES, bodyweight: 60 }), (60 + 10) * 12);
+});
+
+test('context ありでも external 種目は体重を加味しない（従来どおり）', () => {
+  const sets = [{ exId: 'pec_fly', weight: 20, reps: 10 }];
+  assert.equal(calcVolume(sets, { exercises: LOAD_EXERCISES, bodyweight: 60 }), 20 * 10);
+});
+
+test('context ありでも未知のexIdは external と同じ扱いにする', () => {
+  const sets = [{ exId: '存在しない', weight: 20, reps: 10 }];
+  assert.equal(calcVolume(sets, { exercises: LOAD_EXERCISES, bodyweight: 60 }), 20 * 10);
+});
+
+test('context を省略すると従来どおりの挙動になる（assist/bodyweightでも体重を加味しない）', () => {
+  assert.equal(calcVolume([{ exId: 'chin_assist', weight: -40, reps: 8 }]), 0);
+  assert.equal(calcVolume([{ exId: 'ab_coaster', weight: 0, reps: 15 }]), 0);
+});
+
+test('bodyweight が NaN・欠損のときは0として扱い従来の挙動に劣化させる', () => {
+  const sets = [{ exId: 'chin_assist', weight: -40, reps: 8 }];
+  assert.equal(calcVolume(sets, { exercises: LOAD_EXERCISES, bodyweight: NaN }), 0);
+  assert.equal(calcVolume(sets, { exercises: LOAD_EXERCISES }), 0);
+  assert.equal(calcVolume(sets, { exercises: LOAD_EXERCISES, bodyweight: 'oops' }), 0);
+});
+
 test('週次の総挙上量を月曜始まりで集計する', () => {
   const workouts = [
     { date: '2026-07-27', program: 'A', volume: 1000 }, // 月

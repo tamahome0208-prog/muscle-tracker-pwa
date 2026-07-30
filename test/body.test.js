@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { latestBody, bodyDiff, bodySeries } from '../js/body.js';
+import { latestBody, bodyDiff, bodySeries, currentBodyweight } from '../js/body.js';
 
 const BODY = [
   { date: '2026-04-29', weight: 60.0, muscle: 45.0, fatPct: 20.0, source: 'inbody' },
@@ -44,4 +44,22 @@ test('グラフ用に日付昇順の3系列を返す', () => {
 test('基準日より後の記録が無ければ差分は0（例外にしない）', () => {
   assert.deepEqual(bodyDiff(BODY, '2026-12-01'), { weight: 0, muscle: 0, fatPct: 0 });
   assert.deepEqual(bodyDiff([]), { weight: 0, muscle: 0, fatPct: 0 });
+});
+
+test('currentBodyweight は最新のInBody記録の体重を優先する', () => {
+  assert.equal(currentBodyweight(BODY, { weight: 70 }), 59.8);
+});
+
+test('currentBodyweight は記録が無ければ profile.weight を使う', () => {
+  assert.equal(currentBodyweight([], { weight: 70 }), 70);
+});
+
+test('currentBodyweight は記録もprofileも無ければ0', () => {
+  assert.equal(currentBodyweight([], undefined), 0);
+  assert.equal(currentBodyweight([], {}), 0);
+});
+
+test('currentBodyweight は壊れた記録を無視する（latestBodyと同じ方針）', () => {
+  const broken = [{ date: 'not-a-date', weight: 999 }];
+  assert.equal(currentBodyweight(broken, { weight: 70 }), 70);
 });

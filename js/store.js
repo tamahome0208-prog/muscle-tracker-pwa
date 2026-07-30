@@ -23,6 +23,7 @@ function deepFreeze(value) {
 export const DEFAULTS = deepFreeze({
   profile: {
     height: 162,
+    weight: 60,
     startDate: null,
     targets: { protein: 100, kcalMin: 1700, kcalMax: 1800, kcalFloor: 1500, alcoholMl: 500 }
   },

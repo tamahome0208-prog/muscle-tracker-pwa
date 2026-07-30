@@ -124,9 +124,12 @@ button:active { transform: scale(.97); }
    高さにする。recordSet は毎回トースト表示とタイマー開始を連続して行うため、
    ここが被っているとPBのたびに新しい休憩カウントダウンが2.2秒間トーストの下に
    隠れてしまっていた。 */
+/* #timer と同じ理由で pointer-events を切る。トーストは通知だけで押す要素は無いのに、
+   z-index:30 で最後の種目の✓ボタンの下端に約14px重なり、タップを奪っていた。
+   自己ベストのたびに出るため、最初の数週間はほぼ毎セット発生する経路だった。 */
 #toast { position: fixed; left: 50%; transform: translateX(-50%);
   bottom: calc(150px + var(--safe-bottom)); background: var(--panel); color: var(--text);
-  border: 1px solid var(--line);
+  border: 1px solid var(--line); pointer-events: none;
   font-weight: 700; padding: 12px 18px; border-radius: 20px; z-index: 30; }
 /* 自己ベストの通知だけ金にする。それ以外のトーストは金を使わない */
 #toast.pb { background: var(--pb); color: var(--on-pb); border-color: var(--pb);

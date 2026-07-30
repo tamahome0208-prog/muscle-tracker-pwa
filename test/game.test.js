@@ -92,6 +92,16 @@ test('bodyweight を渡しても external 種目のXPは変わらない', () => 
   assert.equal(withBw.back, 30);
 });
 
+test('bodyweight が負値でもXPを減らさない（完成したワークアウトがXPを減らすことはあってはならない）', () => {
+  const workout = {
+    date: '2026-07-29', program: 'B',
+    sets: [{ exId: 'ab_coaster', weight: 0, reps: 15 }]
+  };
+  const before = { chest: 0, back: 0, shoulder: 0, leg: 0, arm: 0, abs: 100 };
+  const xp = addWorkoutXp(before, workout, LOAD_EXERCISES, -60);
+  assert.equal(xp.abs, 100); // 0が加算される。減ってはならない
+});
+
 test('レーダー用データは6部位すべてのレベルを返す', () => {
   const data = radarData({ chest: 400, back: 900, shoulder: 0, leg: 100, arm: 0, abs: 0 });
   assert.equal(data.length, 6);
@@ -147,6 +157,22 @@ test('記録が無ければ0', () => {
   assert.equal(calcStreak([], '2026-07-29'), 0);
 });
 
+test('calcStreak: 同じ日に複数記録しても実施日数としては1日なので水増ししない', () => {
+  const workouts = [
+    { date: '2026-07-27', program: 'A' },
+    { date: '2026-07-27', program: 'B' }, // 同日2件目（本来は1回のジム訪問）
+    { date: '2026-07-29', program: 'C' }
+  ];
+  // 実施日は2026-07-27, 2026-07-29の2日だけなので週3回に届かない
+  assert.equal(calcStreak(workouts, '2026-07-29'), 0);
+});
+
+test('calcStreak: null要素が混ざっていても例外を投げずに無視する', () => {
+  const workouts = [null, ...gymWeek('2026-07-27', 3)];
+  assert.doesNotThrow(() => calcStreak(workouts, '2026-07-29'));
+  assert.equal(calcStreak(workouts, '2026-07-29'), 1);
+});
+
 test('開始から28日未満は初期モード', () => {
   assert.equal(isInitialPhase('2026-07-01', '2026-07-28'), true);
   assert.equal(isInitialPhase('2026-07-01', '2026-07-29'), false);
@@ -191,6 +217,14 @@ test('先週の朝プロテインは今週に数えない', () => {
 
 test('先週のジムの記録は今週のgymCountに混ざらない', () => {
   const workouts = [...gymWeek('2026-07-20', 3), ...gymWeek('2026-07-27', 1)];
+  assert.equal(initialPhaseStatus(workouts, [], '2026-07-29').gymCount, 1);
+});
+
+test('initialPhaseStatus: 同じ日に複数記録があってもgymCountは実施日数(1)としてカウントする（チップの誤操作対策）', () => {
+  const workouts = [
+    { date: '2026-07-27', program: 'A' },
+    { date: '2026-07-27', program: 'B' }
+  ];
   assert.equal(initialPhaseStatus(workouts, [], '2026-07-29').gymCount, 1);
 });
 

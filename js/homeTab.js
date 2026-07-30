@@ -98,18 +98,22 @@ export function renderHomeTab() {
 
 /**
  * 週の達成可否（weekFeasibility の結果）の見出し。
- * これは「失敗」を見せる場所ではないので、達成不可能になったときも
- * 「今週は◯回で締め」という区切りの言い方にし、責める言葉は使わない。
+ * これは「失敗」を見せる場所ではないので、週3回の目標に届かなくなっても、
+ * 今週にまだ日が残っている限りは（canFitMore）「まだ入る」という前向きな
+ * 言い方にする。「今週は◯回で締め」という区切り（罰）の言い方は、本当に
+ * 今週の日が尽きた場合だけに使う。土曜に「締め」を出していたのが元のバグ。
  */
 function feasibilityHeadline(f) {
   if (f.remaining === 0) return `今週${f.done}回 達成`;
   if (f.stillPossible) return `残り${f.remaining}回`;
+  if (f.canFitMore) return `今週あと${f.daysLeftInWeek}回入る`;
   return `今週は${f.done}回で締め`;
 }
 
 function feasibilitySub(f) {
   if (f.remaining === 0) return '今週の目標はクリアしました';
   if (f.stillPossible) return `今週あと${f.daysLeftInWeek}日 · 間に合う`;
+  if (f.canFitMore) return `週3回には届かないけれど、まだ${f.daysLeftInWeek}日ある`;
   return '来週から';
 }
 

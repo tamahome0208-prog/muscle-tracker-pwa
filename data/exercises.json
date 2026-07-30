@@ -16,7 +16,7 @@
   { "id": "leg_press",           "program": "C", "part": "leg",      "name": "レッグプレス",               "defaultWeight": 60,  "defaultReps": 10, "sets": 3, "step": 5,   "load": "external",   "note": "" },
   { "id": "leg_extension",       "program": "C", "part": "leg",      "name": "レッグエクステンション",     "defaultWeight": 25,  "defaultReps": 10, "sets": 3, "step": 2.5, "load": "external",   "note": "" },
   { "id": "seated_leg_curl",     "program": "C", "part": "leg",      "name": "シーテッドレッグカール",     "defaultWeight": 20,  "defaultReps": 10, "sets": 3, "step": 2.5, "load": "external",   "note": "" },
-  { "id": "back_extension",      "program": "C", "part": "back",     "name": "バックエクステンション",     "defaultWeight": 0,   "defaultReps": 12, "sets": 3, "step": 2.5, "load": "bodyweight", "note": "自重から開始" },
-  { "id": "ab_coaster",          "program": "C", "part": "abs",      "name": "アブコースター",             "defaultWeight": 0,   "defaultReps": 15, "sets": 3, "step": 2.5, "load": "bodyweight", "note": "自重15回×3" },
+  { "id": "back_extension",      "program": "C", "part": "back",     "name": "バックエクステンション",     "defaultWeight": 0,   "defaultReps": 12, "sets": 3, "step": 2.5, "load": "bodyweight", "loadFactor": 0.5, "note": "自重から開始。loadFactor 0.5は体重のうちどの程度が実際に動くかの粗い近似であり、実測値ではない" },
+  { "id": "ab_coaster",          "program": "C", "part": "abs",      "name": "アブコースター",             "defaultWeight": 0,   "defaultReps": 15, "sets": 3, "step": 2.5, "load": "bodyweight", "loadFactor": 0.5, "note": "自重15回×3。loadFactor 0.5は体重のうちどの程度が実際に動くかの粗い近似であり、実測値ではない" },
   { "id": "abdominal",           "program": "C", "part": "abs",      "name": "アブドミナル",               "defaultWeight": 20,  "defaultReps": 12, "sets": 3, "step": 2.5, "load": "external",   "note": "" }
 ]

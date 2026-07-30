@@ -1,4 +1,4 @@
-import { calcVolume, weekKey } from './workout.js';
+import { calcVolume, weekKey, distinctDatesPerWeek } from './workout.js';
 
 export const PARTS = ['chest', 'back', 'shoulder', 'leg', 'arm', 'abs'];
 
@@ -66,17 +66,18 @@ function shiftWeeks(dateStr, delta) {
 }
 
 /**
- * 連続週数。判定条件はジム3回のみ。
+ * 連続週数。判定条件は「週3回ジムへ行った日数」。
  * 食事や写真を条件に足すと切れやすくなり、ストリークの意味が失われるため意図的に含めない。
  * 進行中の今週はまだ未達でも切らない（達成していればカウントする）。
+ * 同じ日に複数回の記録があっても、ジムへ行った回数は1回として数える
+ * （js/workout.js の distinctDatesPerWeek を参照。同日複数記録での水増しを防ぐ）。
+ * workouts に null 要素（壊れたレコード）が混ざっていても distinctDatesPerWeek 側で
+ * 例外を投げずに読み飛ばす。
  */
 export function calcStreak(workouts, todayStr) {
+  const dateMap = distinctDatesPerWeek(workouts);
   const counts = new Map();
-  for (const w of workouts) {
-    if (typeof w.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(w.date)) continue;
-    const key = weekKey(w.date);
-    counts.set(key, (counts.get(key) ?? 0) + 1);
-  }
+  for (const [week, dates] of dateMap) counts.set(week, dates.size);
   const thisWeek = weekKey(todayStr);
   let streak = 0;
   let cursor = todayStr;
@@ -107,13 +108,12 @@ export function isInitialPhase(startDate, todayStr) {
 /**
  * 初期4週間で追跡する2項目だけを返す。
  * 「まず週3ジムと朝プロテインだけ習慣化できれば、あとは自動的に進む」という方針に対応。
+ * gymCount は実施日数（同じ日の複数記録は1回として数える。calcStreak・weekFeasibility
+ * と同じ数え方。js/workout.js の distinctDatesPerWeek を参照）。
  */
 export function initialPhaseStatus(workouts, meals, todayStr) {
   const thisWeek = weekKey(todayStr);
-  const gymCount = (workouts ?? []).filter((w) => {
-    if (typeof w.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(w.date)) return false;
-    return weekKey(w.date) === thisWeek;
-  }).length;
+  const gymCount = distinctDatesPerWeek(workouts).get(thisWeek)?.size ?? 0;
 
   const proteinMornings = new Set();
   for (const meal of meals ?? []) {

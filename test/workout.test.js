@@ -9,10 +9,13 @@ import {
   updateBests,
   warnsBadmintonAfterLegs,
   weekKey,
+  isValidDateStr,
   restorableSession,
   programStatus,
   weekFeasibility,
   daysUntilDetraining,
+  distinctDatesPerWeek,
+  migrateHistoricalVolume,
   PROGRAMS
 } from '../js/workout.js';
 
@@ -39,6 +42,12 @@ test('未知のprogramの記録は無視して直近の既知programから継続
     { date: '2026-07-27', program: 'A' },
     { date: '2026-07-29', program: undefined }
   ];
+  assert.equal(nextProgram(workouts), 'B');
+});
+
+test('nextProgram は null 要素が混ざっていても例外を投げずに無視する', () => {
+  const workouts = [null, { date: '2026-07-27', program: 'A' }];
+  assert.doesNotThrow(() => nextProgram(workouts));
   assert.equal(nextProgram(workouts), 'B');
 });
 
@@ -113,6 +122,31 @@ test('bodyweight が NaN・欠損のときは0として扱い従来の挙動に�
   assert.equal(calcVolume(sets, { exercises: LOAD_EXERCISES, bodyweight: 'oops' }), 0);
 });
 
+test('bodyweight が負値でも0としてクランプする（体重データの破損が総挙上量・XPを減らさないため）', () => {
+  const assistSets = [{ exId: 'chin_assist', weight: -40, reps: 8 }];
+  assert.equal(calcVolume(assistSets, { exercises: LOAD_EXERCISES, bodyweight: -60 }), 0);
+  const bodyweightSets = [{ exId: 'ab_coaster', weight: 0, reps: 15 }];
+  assert.equal(calcVolume(bodyweightSets, { exercises: LOAD_EXERCISES, bodyweight: -60 }), 0);
+});
+
+test('loadFactor はbodyweight成分にだけ掛かる（既定1.0）', () => {
+  const exercises = [{ id: 'back_extension', load: 'bodyweight', loadFactor: 0.5 }];
+  const sets = [{ exId: 'back_extension', weight: 10, reps: 12 }];
+  assert.equal(calcVolume(sets, { exercises, bodyweight: 60 }), (60 * 0.5 + 10) * 12);
+});
+
+test('loadFactor が無い種目は従来どおり1.0として扱う', () => {
+  const exercises = [{ id: 'ab_coaster', load: 'bodyweight' }];
+  const sets = [{ exId: 'ab_coaster', weight: 0, reps: 15 }];
+  assert.equal(calcVolume(sets, { exercises, bodyweight: 60 }), 60 * 15);
+});
+
+test('loadFactor が不正(0以下・非数値)なら1.0にフォールバックする', () => {
+  const exercises = [{ id: 'x', load: 'bodyweight', loadFactor: 0 }];
+  const sets = [{ exId: 'x', weight: 0, reps: 10 }];
+  assert.equal(calcVolume(sets, { exercises, bodyweight: 60 }), 600);
+});
+
 test('週次の総挙上量を月曜始まりで集計する', () => {
   const workouts = [
     { date: '2026-07-27', program: 'A', volume: 1000 }, // 月
@@ -144,6 +178,25 @@ test('weeklyVolume は日付が不正な記録を例外を投げずに除外す�
   assert.equal(weeks[0].volume, 1000);
 });
 
+test('weeklyVolume は実在しない暦日（2026-13-01等）の記録も例外を投げずに除外する', () => {
+  const workouts = [
+    { date: '2026-07-27', program: 'A', volume: 1000 },
+    { date: '2026-13-01', program: 'B', volume: 99999 }
+  ];
+  assert.doesNotThrow(() => weeklyVolume(workouts));
+  const weeks = weeklyVolume(workouts);
+  assert.equal(weeks.length, 1);
+  assert.equal(weeks[0].volume, 1000);
+});
+
+test('weeklyVolume は null 要素が混ざっていても例外を投げずに無視する', () => {
+  const workouts = [null, { date: '2026-07-27', program: 'A', volume: 1000 }];
+  assert.doesNotThrow(() => weeklyVolume(workouts));
+  const weeks = weeklyVolume(workouts);
+  assert.equal(weeks.length, 1);
+  assert.equal(weeks[0].volume, 1000);
+});
+
 test('weekKey は月曜始まりのISO週番号を返す', () => {
   assert.equal(weekKey('2025-12-29'), '2026-W01');
   assert.equal(weekKey('2026-07-29'), '2026-W31');
@@ -155,6 +208,18 @@ test('weekKey は月曜始まりのISO週番号を返す', () => {
 test('weekKey は不正な形式の日付で例外を投げる', () => {
   assert.throws(() => weekKey(undefined));
   assert.throws(() => weekKey('2026-7-9')); // ゼロ埋めなし
+});
+
+test('weekKey は桁数は合うが実在しない暦日（月13など）でも例外を投げる（Invalid Dateを黙って通さない）', () => {
+  assert.throws(() => weekKey('2026-13-01'));
+});
+
+test('isValidDateStr: 実在する暦日はtrue、形式違反・実在しない暦日はfalse', () => {
+  assert.equal(isValidDateStr('2026-07-29'), true);
+  assert.equal(isValidDateStr('2026-13-01'), false);
+  assert.equal(isValidDateStr('2026-7-9'), false);
+  assert.equal(isValidDateStr(undefined), false);
+  assert.equal(isValidDateStr(null), false);
 });
 
 test('前回のセットを種目ごとに引ける（同一セッション内では最後のセットを返す）', () => {
@@ -172,6 +237,12 @@ test('前回のセットを種目ごとに引ける（同一セッション内�
   ];
   assert.deepEqual(lastSetFor(workouts, 'seated_row'), { weight: 35, reps: 8 });
   assert.equal(lastSetFor(workouts, 'leg_press'), null);
+});
+
+test('lastSetFor は null 要素が混ざっていても例外を投げずに無視する', () => {
+  const workouts = [null, { date: '2026-07-27', program: 'B', sets: [{ exId: 'seated_row', weight: 30, reps: 10 }] }];
+  assert.doesNotThrow(() => lastSetFor(workouts, 'seated_row'));
+  assert.deepEqual(lastSetFor(workouts, 'seated_row'), { weight: 30, reps: 10 });
 });
 
 test('記録が無ければ最初のセットはPB', () => {
@@ -346,13 +417,20 @@ test('programStatus: 今日実施していればdaysAgoは0', () => {
   assert.equal(statuses.find((s) => s.program === 'A').daysAgo, 0);
 });
 
+test('programStatus: null要素が混ざっていても例外を投げずに無視する（レンダーが落ちる原因になっていた）', () => {
+  const workouts = [null, { date: '2026-07-29', program: 'C' }];
+  assert.doesNotThrow(() => programStatus(workouts, '2026-07-29'));
+  const statuses = programStatus(workouts, '2026-07-29');
+  assert.equal(statuses.find((s) => s.program === 'C').lastDate, '2026-07-29');
+});
+
 // --- weekFeasibility（今週の目標に対する達成可否） ---
 // 2026-07-27(月)〜2026-08-02(日) が 2026-W31。today='2026-07-29' は同じ週の水曜(index2)で
 // daysLeftInWeek = 7-2 = 5。
 
 test('weekFeasibility: 記録が無ければ0/3、まだ十分間に合う', () => {
   const f = weekFeasibility([], '2026-07-29');
-  assert.deepEqual(f, { done: 0, remaining: 3, daysLeftInWeek: 5, stillPossible: true });
+  assert.deepEqual(f, { done: 0, remaining: 3, daysLeftInWeek: 5, stillPossible: true, canFitMore: false });
 });
 
 test('weekFeasibility: 今週1回なら残り2回', () => {
@@ -413,6 +491,53 @@ test('weekFeasibility: 境界（達成可否が切り替わる日） 残り2回�
   assert.equal(f.remaining, 2);
   assert.equal(f.daysLeftInWeek, 1);
   assert.equal(f.stillPossible, false);
+  // 週3回の目標そのものには届かなくても、今日という1日はまだ残っているので
+  // 「締め」（罰の言い方）ではなく「まだ入る」を示す第三の状態になる。
+  assert.equal(f.canFitMore, true);
+});
+
+// --- weekFeasibility の3状態（達成／まだ入る／締め）の境界日テスト ---
+// 「今週は0回で締め」を土曜に出していたのが元のバグ。土曜(daysLeftInWeek=2)・
+// 日曜(daysLeftInWeek=1)のどちらも、月曜始まりの定義上「今日」という1日は
+// 必ず残っているため、canFitMore は true になり「締め」は出ない。
+
+test('weekFeasibility: 土曜・今週0回 → 目標には届かないが2日残っているので前向きな状態になる', () => {
+  const f = weekFeasibility([], '2026-08-01'); // 土曜
+  assert.equal(f.done, 0);
+  assert.equal(f.remaining, 3);
+  assert.equal(f.daysLeftInWeek, 2);
+  assert.equal(f.stillPossible, false); // 3回は物理的に間に合わない
+  assert.equal(f.canFitMore, true);     // が、まだ2日ある
+});
+
+test('weekFeasibility: 日曜・今週0回 → 今日という1日は残っているので締めにはしない', () => {
+  const f = weekFeasibility([], '2026-08-02'); // 日曜（今週最後の日）
+  assert.equal(f.done, 0);
+  assert.equal(f.remaining, 3);
+  assert.equal(f.daysLeftInWeek, 1);
+  assert.equal(f.stillPossible, false);
+  assert.equal(f.canFitMore, true);
+});
+
+test('weekFeasibility: 週の途中（達成状態）は canFitMore を立てない', () => {
+  const workouts = [
+    { date: '2026-07-27', program: 'A' },
+    { date: '2026-07-28', program: 'B' },
+    { date: '2026-07-29', program: 'C' }
+  ];
+  const f = weekFeasibility(workouts, '2026-07-29'); // 水曜、既に3回達成
+  assert.equal(f.stillPossible, true);
+  assert.equal(f.canFitMore, false);
+});
+
+test('weekFeasibility: 同じ日に複数回の記録があってもジム1回として数える（チップの誤操作対策）', () => {
+  const workouts = [
+    { date: '2026-07-27', program: 'A' },
+    { date: '2026-07-27', program: 'B' } // 同日2件目
+  ];
+  const f = weekFeasibility(workouts, '2026-07-29');
+  assert.equal(f.done, 1);
+  assert.equal(f.remaining, 2);
 });
 
 test('weekFeasibility: 月をまたぐ週でも同じ週として数える', () => {
@@ -497,4 +622,82 @@ test('daysUntilDetraining: 日付が欠損・不正な記録は例外を投げ�
   assert.doesNotThrow(() => daysUntilDetraining(workouts, '2026-07-29'));
   const d = daysUntilDetraining(workouts, '2026-07-29');
   assert.equal(d.lastDate, '2026-07-27');
+});
+
+test('daysUntilDetraining: 未来日付の記録はdaysSince/daysLeftを負・過大にせずクランプする', () => {
+  const workouts = [{ date: '2026-08-05', program: 'A' }]; // todayより後
+  const d = daysUntilDetraining(workouts, '2026-07-29');
+  assert.equal(d.daysSince, 0);
+  assert.equal(d.daysLeft, 14);
+  assert.equal(d.overdue, false);
+});
+
+// --- distinctDatesPerWeek（同日複数記録の水増し防止の共通土台） ---
+
+test('distinctDatesPerWeek: 同じ日の複数記録は1件として数える', () => {
+  const workouts = [
+    { date: '2026-07-27', program: 'A' },
+    { date: '2026-07-27', program: 'B' },
+    { date: '2026-07-28', program: 'C' }
+  ];
+  const map = distinctDatesPerWeek(workouts);
+  assert.equal(map.get('2026-W31').size, 2);
+});
+
+test('distinctDatesPerWeek: 日付が欠損・不正・null要素は例外を投げずに除外する', () => {
+  const workouts = [null, { date: undefined, program: 'A' }, { date: '2026-07-27', program: 'C' }];
+  assert.doesNotThrow(() => distinctDatesPerWeek(workouts));
+  const map = distinctDatesPerWeek(workouts);
+  assert.equal(map.get('2026-W31').size, 1);
+});
+
+// --- migrateHistoricalVolume（総挙上量の会計モデル移行の一度きりの再計算） ---
+
+test('migrateHistoricalVolume: そのワークアウト日付「以前」で最新の体重記録を使って再計算する', () => {
+  const exercises = [{ id: 'ab_coaster', load: 'bodyweight' }];
+  const workouts = [
+    { date: '2026-04-01', program: 'C', sets: [{ exId: 'ab_coaster', weight: 0, reps: 15 }], volume: 0 }
+  ];
+  const body = [
+    { date: '2026-03-01', weight: 60, muscle: 45, fatPct: 20 }, // 4/1時点で有効
+    { date: '2026-06-01', weight: 65, muscle: 45, fatPct: 20 }  // 4/1より後なので使わない
+  ];
+  const migrated = migrateHistoricalVolume(workouts, exercises, body, { weight: 999 });
+  assert.equal(migrated[0].volume, 60 * 15);
+});
+
+test('migrateHistoricalVolume: そのワークアウト日以前に体重記録が無ければprofile.weightを使う', () => {
+  const exercises = [{ id: 'ab_coaster', load: 'bodyweight' }];
+  const workouts = [
+    { date: '2026-01-01', program: 'C', sets: [{ exId: 'ab_coaster', weight: 0, reps: 15 }], volume: 0 }
+  ];
+  const body = [{ date: '2026-03-01', weight: 60, muscle: 45, fatPct: 20 }]; // ワークアウトより後
+  const migrated = migrateHistoricalVolume(workouts, exercises, body, { weight: 70 });
+  assert.equal(migrated[0].volume, 70 * 15);
+});
+
+test('migrateHistoricalVolume: 今日の体重ではなく過去の体重を使う（今の体重が変わっても過去のvolumeは変わらない）', () => {
+  const exercises = [{ id: 'ab_coaster', load: 'bodyweight' }];
+  const workouts = [
+    { date: '2026-04-01', program: 'C', sets: [{ exId: 'ab_coaster', weight: 0, reps: 15 }], volume: 0 }
+  ];
+  const body = [{ date: '2026-03-01', weight: 60, muscle: 45, fatPct: 20 }];
+  const withTodaysHeavierWeight = migrateHistoricalVolume(workouts, exercises, body, { weight: 999 });
+  assert.equal(withTodaysHeavierWeight[0].volume, 60 * 15); // profileの999ではなく当時の記録(60)を使う
+});
+
+test('migrateHistoricalVolume: 壊れたレコード（null・sets非配列）はそのまま返す', () => {
+  const workouts = [null, { date: '2026-04-01', program: 'C', sets: 'garbage', volume: 999 }];
+  const migrated = migrateHistoricalVolume(workouts, [], [], { weight: 60 });
+  assert.equal(migrated[0], null);
+  assert.equal(migrated[1].volume, 999);
+});
+
+test('migrateHistoricalVolume: external種目は体重を加味しないので値は変わらない', () => {
+  const exercises = [{ id: 'lat_pulldown', load: 'external' }];
+  const workouts = [
+    { date: '2026-04-01', program: 'B', sets: [{ exId: 'lat_pulldown', weight: 30, reps: 10 }], volume: 999 }
+  ];
+  const migrated = migrateHistoricalVolume(workouts, exercises, [], { weight: 60 });
+  assert.equal(migrated[0].volume, 300);
 });

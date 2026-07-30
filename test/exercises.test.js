@@ -39,3 +39,19 @@ test('全種目に有効なloadがある（external/assist/bodyweightのいず�
     assert.ok(LOADS.includes(e.load), `loadが不正: ${e.id} (${e.load})`);
   }
 });
+
+test('loadFactorを持つ種目は0より大きい数値', () => {
+  for (const e of exercises) {
+    if ('loadFactor' in e) {
+      assert.equal(typeof e.loadFactor, 'number', `loadFactorが数値でない: ${e.id}`);
+      assert.ok(e.loadFactor > 0, `loadFactorは0より大きい必要がある: ${e.id}`);
+    }
+  }
+});
+
+test('ab_coaster・back_extensionは体重を全部負荷にしないようloadFactorを0.5にしている', () => {
+  const abCoaster = exercises.find((e) => e.id === 'ab_coaster');
+  const backExtension = exercises.find((e) => e.id === 'back_extension');
+  assert.equal(abCoaster.loadFactor, 0.5);
+  assert.equal(backExtension.loadFactor, 0.5);
+});

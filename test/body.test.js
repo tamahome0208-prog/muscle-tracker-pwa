@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { latestBody, bodyDiff, bodySeries, currentBodyweight } from '../js/body.js';
+import { latestBody, bodyDiff, bodySeries, currentBodyweight, bodyweightAsOf } from '../js/body.js';
 
 const BODY = [
   { date: '2026-04-29', weight: 60.0, muscle: 45.0, fatPct: 20.0, source: 'inbody' },
@@ -62,4 +62,31 @@ test('currentBodyweight は記録もprofileも無ければ0', () => {
 test('currentBodyweight は壊れた記録を無視する（latestBodyと同じ方針）', () => {
   const broken = [{ date: 'not-a-date', weight: 999 }];
   assert.equal(currentBodyweight(broken, { weight: 70 }), 70);
+});
+
+test('currentBodyweight は最新記録の日付が有効でもweightが欠損・0・負値・非数値ならprofile.weightにフォールバックする', () => {
+  assert.equal(currentBodyweight([{ date: '2026-07-29', weight: null }], { weight: 70 }), 70);
+  assert.equal(currentBodyweight([{ date: '2026-07-29', weight: 0 }], { weight: 70 }), 70);
+  assert.equal(currentBodyweight([{ date: '2026-07-29', weight: -60 }], { weight: 70 }), 70);
+  assert.equal(currentBodyweight([{ date: '2026-07-29' }], { weight: 70 }), 70);
+  assert.equal(currentBodyweight([{ date: '2026-07-29', weight: 'oops' }], { weight: 70 }), 70);
+});
+
+test('currentBodyweight は正の有限数のweightならそのまま使う', () => {
+  assert.equal(currentBodyweight([{ date: '2026-07-29', weight: 59.8 }], { weight: 70 }), 59.8);
+});
+
+test('bodyweightAsOf はその日付以前で最新の記録の体重を使う（今日の体重を過去に使わない）', () => {
+  assert.equal(bodyweightAsOf(BODY, '2026-06-01', { weight: 999 }), 59.5); // 05-29の記録
+  assert.equal(bodyweightAsOf(BODY, '2026-12-01', { weight: 999 }), 59.8); // 最新まで含む
+  assert.equal(bodyweightAsOf(BODY, '2026-04-29', { weight: 999 }), 60.0); // 当日の記録も含める
+});
+
+test('bodyweightAsOf はその日付以前に記録が無ければprofile.weightにフォールバックする', () => {
+  assert.equal(bodyweightAsOf(BODY, '2026-04-01', { weight: 999 }), 999);
+  assert.equal(bodyweightAsOf([], '2026-07-29', { weight: 70 }), 70);
+});
+
+test('bodyweightAsOf は壊れたweightの記録を無視してprofileにフォールバックする', () => {
+  assert.equal(bodyweightAsOf([{ date: '2026-07-01', weight: -1 }], '2026-07-15', { weight: 70 }), 70);
 });

@@ -6,6 +6,7 @@ import { initPhotoTab, stopCamera } from './photoTab.js';
 import { initRecordTab } from './recordTab.js';
 import { initHomeTab } from './homeTab.js';
 import { initSettingsTab } from './settingsTab.js';
+import { migrateHistoricalVolume } from './workout.js';
 
 export const store = createStore();
 
@@ -54,6 +55,25 @@ async function loadSeed() {
       store.set('profile', { ...store.get('profile'), exercisesSyncedV2: true });
     } catch (err) {
       console.warn('種目マスタの同期に失敗しました。今回の起動はスキップします:', err);
+    }
+  }
+
+  // 総挙上量の会計モデル変更(体重を考慮した計算の導入)に伴う、保存済みワークアウトの
+  // volume 一度きりの再計算。通常運用では「volumeは保存時にスタンプし遡って再計算
+  // しない」という原則を守るが、これはモデル自体が変わった一度きりの移行でありその
+  // 例外にあたる。profile.volumeModelMigrated で二重実行を防ぐ。
+  // 失敗しても起動は継続し、フラグを立てないので次回起動時に再試行される。
+  const profileBeforeVolumeMigration = store.get('profile');
+  if (!profileBeforeVolumeMigration.volumeModelMigrated) {
+    try {
+      const workouts = store.get('workouts');
+      const currentExercises = store.get('exercises'); // load移行後の最新の内容を使う
+      const body = store.get('body');
+      const migrated = migrateHistoricalVolume(workouts, currentExercises, body, profileBeforeVolumeMigration);
+      store.set('workouts', migrated);
+      store.set('profile', { ...profileBeforeVolumeMigration, volumeModelMigrated: true });
+    } catch (err) {
+      console.warn('過去のワークアウトのvolume再計算に失敗しました。今回の起動はスキップします:', err);
     }
   }
 

@@ -57,7 +57,7 @@ export function startSession(date) {
 function confirmSameDayDuplicate(date, program) {
   const alreadyLogged = store.get('workouts').some((w) => w?.date === date && w.program === program);
   if (!alreadyLogged) return true;
-  const label = date === todayStr() ? '今日' : `${date}`;
+  const label = date === todayStr() ? '今日' : `${date}に`;
   return confirm(
     `${program}は${label}すでに記録済みです。もう一度${program}を記録すると、同じ日に2件登録されます` +
     `（今週の達成回数などの数え方は日数なので二重には数えませんが、記録自体は増えます）。` +

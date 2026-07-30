@@ -17,7 +17,7 @@ body {
 #statusBar { position: sticky; top: 0; z-index: 10; background: var(--panel);
   border-bottom: 1px solid var(--line); padding: 8px 12px; }
 .bar { display: grid; grid-template-columns: 90px 1fr auto; gap: 8px;
-  align-items: center; font-size: 12px; margin: 4px 0; }
+  align-items: center; font-size: 13px; margin: 4px 0; }
 .bar-label { color: var(--muted); }
 .bar-value { font-variant-numeric: tabular-nums; }
 .track { height: 8px; background: var(--track); border-radius: 4px; overflow: hidden; }
@@ -26,7 +26,7 @@ body {
 .fill.done { background: var(--ok); }
 
 #warnings:empty { display: none; }
-.warn { font-size: 12px; padding: 6px 8px; border-radius: 6px; margin-top: 6px; }
+.warn { font-size: 13px; padding: 6px 8px; border-radius: 6px; margin-top: 6px; }
 .warn.danger { background: #3a1218; color: #ffb3ba; border: 1px solid var(--danger); }
 .warn.warn { background: #3a2f12; color: #ffe0a3; }
 .warn.info { background: #12202e; color: #bcd8ff; }
@@ -42,11 +42,12 @@ h2 { font-size: 16px; margin: 16px 0 8px; }
   border-top-left-radius: 0; border-bottom-left-radius: 0;
 }
 .big { font-size: 30px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
-.muted { color: var(--muted); font-size: 12px; }
+.muted { color: var(--muted); font-size: 13px; }
 .up { color: var(--ok); }
 
 button { font: inherit; color: inherit; background: #202024;
-  border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px;
+  min-height: 48px; }
 button:active { transform: scale(.97); }
 .primary { background: var(--accent); color: var(--on-accent); border: none; font-weight: 700; }
 .chips { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
@@ -55,12 +56,27 @@ button:active { transform: scale(.97); }
 .ex { border-bottom: 1px solid var(--line); padding: 10px 0; }
 .ex-head { display: flex; justify-content: space-between; align-items: baseline; }
 .ex-name { font-weight: 600; }
-.ex-last { font-size: 11px; color: var(--muted); }
+.ex-last { font-size: 12px; color: var(--muted); }
 .pb-hint { color: var(--pb); }
-.ex-ctrl { display: flex; gap: 6px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
-.ex-ctrl .num { min-width: 62px; text-align: center; font-variant-numeric: tabular-nums; }
-.setbtn { width: 44px; height: 44px; border-radius: 22px; }
+.ex-ctrl { display: flex; gap: 8px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+.ex-ctrl .num { min-width: 62px; text-align: center; font-variant-numeric: tabular-nums; font-size: 18px; font-weight: 600; }
+/* ＋／－の重量・回数ステッパー。汗ばんだ手でも押しやすい最低48pxを確保 */
+.ex-ctrl button:not(.setbtn) { min-width: 48px; min-height: 48px; font-size: 18px; font-weight: 700; }
+
+/* ✓ セットボタン。このアプリで最も連打されるコントロールなので
+   最低限の44pxではなく56px角＋余白多めにして誤タップを避ける */
+.setbtn { width: 56px; height: 56px; border-radius: 28px; font-size: 20px;
+  margin: 4px 8px 4px 0; border: 2px solid var(--muted); }
 .setbtn.done { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+/* 自己ベスト更新時だけの金の一瞬の演出。金は「レア」に保つため他では使わない */
+.setbtn.pb { animation: pbFlourish .6s ease; border-color: var(--pb) !important;
+  box-shadow: 0 0 0 3px var(--pb); }
+
+@keyframes pbFlourish {
+  0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(255, 209, 102, .9); }
+  40% { transform: scale(1.18); box-shadow: 0 0 0 8px rgba(255, 209, 102, .35); }
+  100% { transform: scale(1); box-shadow: 0 0 0 3px var(--pb); }
+}
 
 /* 写真 */
 .photo-stage { position: relative; background: #000; border-radius: 12px; overflow: hidden; }
@@ -80,11 +96,41 @@ button:active { transform: scale(.97); }
 #tabbar button span { display: block; font-size: 10px; }
 #tabbar button.active { color: var(--accent); }
 
-#timer { position: fixed; right: 12px; bottom: calc(76px + var(--safe-bottom));
-  background: var(--accent); color: var(--on-accent); font-weight: 700;
-  padding: 10px 14px; border-radius: 24px; }
+/* 休憩タイマー。セット間で見続けるものなので見逃しようがない大きさにする */
+#timer { position: fixed; left: 12px; right: 12px; bottom: calc(76px + var(--safe-bottom));
+  background: var(--accent); color: var(--on-accent); font-weight: 800;
+  font-size: 28px; text-align: center; padding: 14px; border-radius: 16px;
+  box-shadow: 0 4px 20px rgba(228, 87, 46, .5); z-index: 25;
+  font-variant-numeric: tabular-nums; animation: timerPulse 1.6s ease-in-out infinite; }
+
+@keyframes timerPulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.03); }
+}
 
 #toast { position: fixed; left: 50%; transform: translateX(-50%);
   bottom: calc(88px + var(--safe-bottom)); background: var(--panel); color: var(--text);
   border: 1px solid var(--line);
-  font-weight: 700; padding: 10px 16px; border-radius: 20px; z-index: 30; }
+  font-weight: 700; padding: 12px 18px; border-radius: 20px; z-index: 30; }
+/* 自己ベストの通知だけ金にする。それ以外のトーストは金を使わない */
+#toast.pb { background: var(--pb); color: var(--on-pb); border-color: var(--pb);
+  box-shadow: 0 0 24px rgba(255, 209, 102, .6); animation: toastPop .4s ease; }
+
+@keyframes toastPop {
+  0% { transform: translateX(-50%) scale(.85); opacity: 0; }
+  100% { transform: translateX(-50%) scale(1); opacity: 1; }
+}
+
+/* タブ切り替え時の軽い入場フェード。操作を遅らせないので即インタラクティブ */
+.tab:not(.hidden) { animation: tabIn .18s ease; }
+@keyframes tabIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tab:not(.hidden) { animation: none; }
+  #timer { animation: none; }
+  .setbtn.pb { animation: none; }
+  #toast.pb { animation: none; }
+}

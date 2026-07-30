@@ -168,7 +168,8 @@ function recordSet(btn, exId, weight, reps) {
   const bests = store.get('game').bests;
   if (isPB(bests, exId, weight, reps)) {
     const name = store.get('exercises').find((e) => e.id === exId)?.name ?? '';
-    toast(`🏆 自己ベスト更新 ${name} ${weight}kg×${reps}`);
+    btn.classList.add('pb');
+    toast(`🏆 自己ベスト更新 ${name} ${weight}kg×${reps}`, 2200, 'pb');
     vibrate([40, 60, 40]);
   }
 

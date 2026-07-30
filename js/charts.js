@@ -10,8 +10,17 @@ function draw(canvasId, config) {
 
 const COLORS = { accent: '#e4572e', muscle: '#4ade80', fat: '#ff5e6c', weight: '#a8a29b' };
 
+// 「週次総挙上量のバーがゼロから伸びる」演出は canvas 描画なので CSS では作れない。
+// Chart.js 標準のアニメーション(初期描画時にゼロから伸びる)を短く(~400ms)して使い、
+// OSの「アニメーション減らす」設定が有効なときはアニメーションそのものを切る。
+function chartAnimationDuration() {
+  if (typeof matchMedia !== 'function') return 400;
+  return matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 400;
+}
+
 const BASE_OPTIONS = {
   responsive: true,
+  animation: { duration: chartAnimationDuration() },
   plugins: { legend: { labels: { color: '#f5f2ee' } } },
   scales: {
     x: { ticks: { color: '#a8a29b' }, grid: { color: '#26262b' } },
@@ -65,6 +74,7 @@ export function drawRadarChart(canvasId, radar) {
     },
     options: {
       responsive: true,
+      animation: { duration: chartAnimationDuration() },
       plugins: { legend: { labels: { color: '#f5f2ee' } } },
       scales: { r: {
         angleLines: { color: '#26262b' }, grid: { color: '#26262b' },

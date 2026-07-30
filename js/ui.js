@@ -30,9 +30,11 @@ export function initTabs() {
 }
 
 let toastTimer = null;
-export function toast(message, ms = 2200) {
+/** variant: 'pb' で自己ベスト演出（金色＋一瞬のポップ）にする。それ以外は通常表示 */
+export function toast(message, ms = 2200, variant = '') {
   const el = $('#toast');
   el.textContent = message;
+  el.classList.toggle('pb', variant === 'pb');
   el.classList.remove('hidden');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.classList.add('hidden'), ms);

@@ -1,18 +1,6 @@
-<!doctype html>
-<html lang="ja">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#0d0d0f">
-<title>筋トレ管理</title>
-<link rel="manifest" href="manifest.json">
-<link rel="stylesheet" href="css/style.css">
-</head>
-<body>
-<!-- assets/sprite.svg のコピー。index.html にインラインしているのは <use href="#…">
-     を外部ドキュメント参照ではなくローカル参照にするため（追加のfetchが発生せず、
-     external <use> 未対応環境にも依存しない）。ソースの原本は assets/sprite.svg
-     側にあり、シンボルを追加・変更したら両方に反映すること。 -->
+<!-- 原本。index.html の <body> 先頭にこの内容をそのままインラインしたコピーがある。
+     シンボルを追加・変更したら両方に反映すること（外部fetchを避けるため index.html
+     側もこのファイルへの参照ではなく複製にしている）。 -->
 <svg xmlns="http://www.w3.org/2000/svg" style="display:none">
 
   <symbol id="i-barbell" viewBox="0 0 24 24">
@@ -104,41 +92,3 @@
     <path fill="currentColor" d="M12.8 41.4h5.4l.6 12.2h-4.6Zm8.8 0H27l-1.4 12.2h-4.6Z"/>
   </symbol>
 </svg>
-
-<header id="statusBar">
-  <div class="bar"><span class="bar-label">タンパク質</span>
-    <div class="track"><div class="fill" id="proteinFill"></div></div>
-    <span class="bar-value" id="proteinValue">0 / 100g</span></div>
-  <div class="bar"><span class="bar-label">カロリー</span>
-    <div class="track"><div class="fill" id="kcalFill"></div></div>
-    <span class="bar-value" id="kcalValue">0 / 1750</span></div>
-  <div class="bar"><span class="bar-label">発泡酒</span>
-    <div class="track"><div class="fill" id="alcoholFill"></div></div>
-    <span class="bar-value" id="alcoholValue">0 / 500ml</span></div>
-  <div id="warnings"></div>
-</header>
-
-<main>
-  <section id="tab-home" class="tab"></section>
-  <section id="tab-workout" class="tab hidden"></section>
-  <section id="tab-meal" class="tab hidden"></section>
-  <section id="tab-photo" class="tab hidden"></section>
-  <section id="tab-record" class="tab hidden"></section>
-  <section id="tab-settings" class="tab hidden"></section>
-</main>
-
-<nav id="tabbar">
-  <button data-tab="home" class="active"><svg class="icon" aria-hidden="true"><use href="#i-plate"></use></svg><span>ホーム</span></button>
-  <button data-tab="workout"><svg class="icon" aria-hidden="true"><use href="#i-barbell"></use></svg><span>トレ</span></button>
-  <button data-tab="meal"><svg class="icon" aria-hidden="true"><use href="#i-bowl"></use></svg><span>食事</span></button>
-  <button data-tab="photo"><svg class="icon" aria-hidden="true"><use href="#i-camera"></use></svg><span>写真</span></button>
-  <button data-tab="record"><svg class="icon" aria-hidden="true"><use href="#i-chart"></use></svg><span>記録</span></button>
-  <button data-tab="settings"><svg class="icon" aria-hidden="true"><use href="#i-gear"></use></svg><span>設定</span></button>
-</nav>
-
-<div id="toast" class="hidden"></div>
-
-<script src="vendor/chart.umd.js"></script>
-<script type="module" src="js/main.js"></script>
-</body>
-</html>

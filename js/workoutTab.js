@@ -5,10 +5,10 @@ import { currentBodyweight } from './body.js';
 
 const PROGRAM_NAMES = { A: '胸・肩・三頭', B: '背中・二頭', C: '脚・腹' };
 const REST_SECONDS = 90;
-const EMPTY_SESSION = { program: null, date: null, sets: [] };
+const EMPTY_SESSION = { program: null, date: null, startedAt: null, sets: [] };
 
 let store;
-let session = null; // { program, date, sets: [] }
+let session = null; // { program, date, startedAt, sets: [] }
 let timerId = null;
 
 export function initWorkoutTab(s) {
@@ -16,11 +16,26 @@ export function initWorkoutTab(s) {
   onShow('workout', renderWorkoutTab);
 }
 
-function startSession() {
-  const restored = restorableSession(store.get('session'), todayStr());
+/**
+ * date は「今回記録する対象の日付」。省略時は今日。日付ビュー(js/dayView.js)から
+ * 過去日を渡して呼ぶと、その日付の記録として保存するセッションを開始する。
+ * すでに進行中の(今日 startedAt の)セッションがあれば date に関わらずそちらを
+ * 優先して復元する(1つのセッションしか同時に持てない設計のため)。
+ *
+ * 対象日にその日の記録がすでにある場合は、プログラム切り替え時(switchProgram)と
+ * 同じ確認ダイアログを挟む。ただし通常の「今日、タブを開いたら自動的に始まる」
+ * 経路(date省略)まで確認を挟むと今までの操作感を変えてしまうため、date が
+ * 明示的に今日以外を指している場合(=バックデート入力)だけ確認する。
+ *
+ * 戻り値: 開始(または復元)できたら true。確認で断られた場合は false を返し、
+ * 呼び出し側(dayView)はタブを切り替えないこと。
+ */
+export function startSession(date) {
+  const today = todayStr();
+  const restored = restorableSession(store.get('session'), today);
   if (restored) {
     session = restored;
-    return;
+    return true;
   }
   // 古い/壊れたセッションが残っていたら復元せず捨てる。次の✓で新しいセッションが
   // 上書きするので必須ではないが、ここで消しておけば storage 上にも古いデータが
@@ -28,7 +43,26 @@ function startSession() {
   if (store.get('session').date) {
     try { store.set('session', EMPTY_SESSION); } catch { /* 消せなくても致命的ではない */ }
   }
-  session = { program: nextProgram(store.get('workouts')), date: todayStr(), sets: [] };
+  const targetDate = date ?? today;
+  const program = nextProgram(store.get('workouts'));
+  if (targetDate !== today && !confirmSameDayDuplicate(targetDate, program)) return false;
+  session = { program, date: targetDate, startedAt: today, sets: [] };
+  return true;
+}
+
+/**
+ * 対象日に同じprogramの記録がすでにあれば確認する。switchProgram の同日重複確認と
+ * 同じ文言・同じ判断基準を共有する(1つの確認ダイアログを2箇所が個別に持たない)。
+ */
+function confirmSameDayDuplicate(date, program) {
+  const alreadyLogged = store.get('workouts').some((w) => w?.date === date && w.program === program);
+  if (!alreadyLogged) return true;
+  const label = date === todayStr() ? '今日' : `${date}`;
+  return confirm(
+    `${program}は${label}すでに記録済みです。もう一度${program}を記録すると、同じ日に2件登録されます` +
+    `（今週の達成回数などの数え方は日数なので二重には数えませんが、記録自体は増えます）。` +
+    `それでも記録しますか？`
+  );
 }
 
 /** セット記録のたびに呼ぶ。書き込みに失敗しても session はメモリ上に残るので
@@ -41,14 +75,30 @@ function persistSession() {
   }
 }
 
+/** '2026-07-28' → '7月28日'（バックデート時のバナー・確認文言用） */
+function formatMonthDay(dateStr) {
+  const [, m, d] = dateStr.split('-');
+  return `${Number(m)}月${Number(d)}日`;
+}
+
 export function renderWorkoutTab() {
-  if (!session) startSession();
+  if (!session) {
+    // date省略時のstartSessionは常にtrueを返す(バックデートでない限り確認を挟まないため)。
+    // それでも念のため false を無視して死んだ画面にしないよう早期returnで守る。
+    if (!startSession()) return;
+  }
   const exercises = store.get('exercises').filter((e) => e.program === session.program);
   const workouts = store.get('workouts');
   const bests = store.get('game').bests;
   const statuses = programStatus(workouts, todayStr());
+  // バックデート入力(対象日が今日でない)であることを常に見える形で示す。
+  // これが無いと、過去日の記録のつもりが今日の記録だと誤解されるおそれがある。
+  const backdatedBanner = session.date !== todayStr()
+    ? `<div class="warn info">${formatMonthDay(session.date)}の記録として保存します</div>`
+    : '';
 
   $('#tab-workout').innerHTML = `
+    ${backdatedBanner}
     <div class="card">
       <div class="ex-head">
         <div><span class="big">【${session.program}】</span> ${PROGRAM_NAMES[session.program]}</div>
@@ -124,7 +174,9 @@ function renderExercise(ex, workouts, bests) {
  * 防ぐため、既存のセットは保持せず新規プログラムで空セッションから始める。
  * 「保持する」選択肢は意図的に用意しない。
  *
- * さらに、切り替え先のプログラムが今日すでに記録済みなら先に確認する。
+ * さらに、切り替え先のプログラムが対象日(session.date。通常は今日、バックデート
+ * 入力中はその過去日)にすでに記録済みなら先に確認する(confirmSameDayDuplicate、
+ * js/workoutTab.js の startSession と同じ確認を共有する)。
  * 例: Aを終えて自動でBに進んだ直後、忘れたセットを足すつもりで「A 今日」
  * チップを押すと、そのまま終了して同じ日に2件目のA記録ができてしまう。
  * 週の達成回数・gymCount・ストリークは記録数ではなく実施日数で数えるため実害は
@@ -134,17 +186,7 @@ function renderExercise(ex, workouts, bests) {
 function switchProgram(program) {
   if (program === session.program) return;
 
-  const today = todayStr();
-  const alreadyLoggedToday = store.get('workouts')
-    .some((w) => w?.date === today && w.program === program);
-  if (alreadyLoggedToday) {
-    const ok = confirm(
-      `${program}は今日すでに記録済みです。もう一度${program}を記録すると、同じ日に2件登録されます` +
-      `（今週の達成回数などの数え方は日数なので二重には数えませんが、記録自体は増えます）。` +
-      `それでも${program}に切り替えますか？`
-    );
-    if (!ok) return;
-  }
+  if (!confirmSameDayDuplicate(session.date, program)) return;
 
   if (session.sets.length > 0) {
     const ok = confirm(`記録済みの${session.sets.length}セットは破棄されます。${program}に切り替えますか？`);
@@ -152,7 +194,9 @@ function switchProgram(program) {
     clearInterval(timerId);
     removeTimer();
   }
-  session = { program, date: todayStr(), sets: [] };
+  // date/startedAt はそのまま引き継ぐ: バックデート入力中にプログラムを切り替えても
+  // 記録対象の日付が今日に巻き戻ってしまわないようにする。
+  session = { program, date: session.date, startedAt: session.startedAt, sets: [] };
   persistSession();
   renderWorkoutTab();
 }

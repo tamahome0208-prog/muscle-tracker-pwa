@@ -20,6 +20,11 @@ test('全種目に id・name・part・初期重量がある', () => {
     assert.equal(typeof e.defaultWeight, 'number', `defaultWeightが数値でない: ${e.id}`);
     assert.equal(typeof e.defaultReps, 'number', `defaultRepsが数値でない: ${e.id}`);
     assert.equal(typeof e.sets, 'number', `setsが数値でない: ${e.id}`);
+    // js/workoutTab.js の onExerciseClick は data-step を重量の増減幅に使う。
+    // step が数値でないと Number(row.dataset.step) が NaN になり、重量表示に
+    // NaN が書き込まれる(呼び出し側には `|| 2.5` のフォールバックがあるが、
+    // データ自体が壊れていることを検知できるようにここでも保証する)。
+    assert.equal(typeof e.step, 'number', `stepが数値でない: ${e.id}`);
   }
 });
 

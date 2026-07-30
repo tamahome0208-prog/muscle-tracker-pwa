@@ -126,6 +126,22 @@ export function updateBests(bests, exId, weight, reps, date) {
   return { ...bests, [exId]: { weight, reps, date } };
 }
 
+/**
+ * 保存されていた進行中セッション(js/store.js の 'session' キー)を、今日の
+ * セッションとして復元してよいか判定する。
+ *
+ * date が今日と一致しない場合は古いセッションとみなして復元しない(数日前の
+ * セッションが今日のexだと勘違いして蘇るのを防ぐ)。program が3種目のいずれ
+ * でもない、または sets が配列でない場合も壊れたデータとして復元しない。
+ * 復元しない場合は null を返し、呼び出し側は新規セッションを開始すること。
+ */
+export function restorableSession(stored, todayStr) {
+  if (!stored || typeof stored.date !== 'string' || stored.date !== todayStr) return null;
+  if (!PROGRAMS.includes(stored.program)) return null;
+  if (!Array.isArray(stored.sets)) return null;
+  return { program: stored.program, date: stored.date, sets: stored.sets };
+}
+
 /** 脚の日（C）の翌日にバドミントンを入れようとしていれば true */
 export function warnsBadmintonAfterLegs(workouts, badmintonDate) {
   const target = new Date(badmintonDate + 'T00:00:00Z');

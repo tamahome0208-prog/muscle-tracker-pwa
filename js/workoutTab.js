@@ -1,9 +1,10 @@
-import { $, onShow, toast, vibrate, todayStr, newId } from './ui.js';
-import { nextProgram, calcVolume, lastSetFor, isPB, updateBests } from './workout.js';
+import { $, onShow, toast, vibrate, todayStr, newId, esc } from './ui.js';
+import { nextProgram, calcVolume, lastSetFor, isPB, updateBests, restorableSession } from './workout.js';
 import { addWorkoutXp, checkBadges, BADGES, calcStreak } from './game.js';
 
 const PROGRAM_NAMES = { A: '胸・肩・三頭', B: '背中・二頭', C: '脚・腹' };
 const REST_SECONDS = 90;
+const EMPTY_SESSION = { program: null, date: null, sets: [] };
 
 let store;
 let session = null; // { program, date, sets: [] }
@@ -15,7 +16,28 @@ export function initWorkoutTab(s) {
 }
 
 function startSession() {
+  const restored = restorableSession(store.get('session'), todayStr());
+  if (restored) {
+    session = restored;
+    return;
+  }
+  // 古い/壊れたセッションが残っていたら復元せず捨てる。次の✓で新しいセッションが
+  // 上書きするので必須ではないが、ここで消しておけば storage 上にも古いデータが
+  // 残り続けない。
+  if (store.get('session').date) {
+    try { store.set('session', EMPTY_SESSION); } catch { /* 消せなくても致命的ではない */ }
+  }
   session = { program: nextProgram(store.get('workouts')), date: todayStr(), sets: [] };
+}
+
+/** セット記録のたびに呼ぶ。書き込みに失敗しても session はメモリ上に残るので
+ * その場のセット自体は失われない(次回の✓や終了時にまた保存を試みる)。 */
+function persistSession() {
+  try {
+    store.set('session', session);
+  } catch {
+    toast('保存できませんでした（端末の空き容量を確認してください）');
+  }
 }
 
 export function renderWorkoutTab() {
@@ -60,7 +82,7 @@ function renderExercise(ex, workouts, bests) {
   return `
     <div class="ex" data-ex="${ex.id}" data-step="${ex.step}">
       <div class="ex-head">
-        <span class="ex-name">${ex.name}</span>
+        <span class="ex-name">${esc(ex.name)}</span>
         <span class="ex-last">${last ? `前回 ${last.weight}×${last.reps}` : '初回'}</span>
       </div>
       ${hint ? `<div class="ex-last pb-hint">${hint}</div>` : ''}
@@ -83,7 +105,7 @@ function onExerciseClick(e) {
   if (!btn) return;
   const row = btn.closest('.ex');
   const exId = row.dataset.ex;
-  const step = Number(row.dataset.step);
+  const step = Number(row.dataset.step) || 2.5;
   const weightEl = row.querySelector('[data-field="weight"]');
   const repsEl = row.querySelector('[data-field="reps"]');
 
@@ -100,6 +122,7 @@ function recordSet(btn, exId, weight, reps) {
   if (btn.classList.contains('done')) return;
   btn.classList.add('done');
   session.sets.push({ exId, weight, reps });
+  persistSession();
 
   const bests = store.get('game').bests;
   if (isPB(bests, exId, weight, reps)) {
@@ -152,7 +175,16 @@ function finishSession() {
     sets: session.sets,
     volume
   });
-  store.set('workouts', workouts);
+
+  // ここが失敗(QuotaExceededError等)したら session は絶対にnullにしない。
+  // メモリ上のセット記録を保持したまま「保存できませんでした」を出し、
+  // ユーザーが再度「終了して保存」を押せばやり直せるようにする。
+  try {
+    store.set('workouts', workouts);
+  } catch {
+    toast('保存できませんでした（端末の空き容量を確認してください）');
+    return;
+  }
 
   const game = store.get('game');
   let bests = game.bests;
@@ -166,7 +198,14 @@ function finishSession() {
     badges: game.badges
   });
 
-  store.set('game', { ...game, bests, xp, streakWeeks: streak, badges: [...game.badges, ...earned] });
+  // workouts は既に保存済みなので、ここから先が失敗してもトレーニング記録自体は
+  // 失われない(称号/XPの更新が反映されないだけ)。session はもう戻す意味が薄い
+  // ので通常どおりクリアし、失敗だけ知らせる。
+  try {
+    store.set('game', { ...game, bests, xp, streakWeeks: streak, badges: [...game.badges, ...earned] });
+  } catch {
+    toast('保存できませんでした（端末の空き容量を確認してください）。トレーニング記録自体は保存されています');
+  }
 
   for (const id of earned) {
     const badge = BADGES.find((b) => b.id === id);
@@ -177,5 +216,9 @@ function finishSession() {
   $('#timer')?.remove();
   toast(`保存しました（総挙上量 ${Math.round(volume)}kg）`);
   session = null;
+  // 終了して保存できたので、復元用に持っていた進行中セッションは消してよい。
+  // 消せなくても(容量逼迫等)致命的ではない: date が過去日として扱われれば
+  // 次回起動時に restorableSession が古いものとして破棄する。
+  try { store.set('session', EMPTY_SESSION); } catch { /* 無視してよい */ }
   renderWorkoutTab();
 }

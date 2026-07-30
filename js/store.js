@@ -39,7 +39,12 @@ export const DEFAULTS = deepFreeze({
     bests: {},
     badges: []
   },
-  settings: { geminiKey: '', useOpenFoodFacts: true, photoReminder: true }
+  settings: { geminiKey: '', useOpenFoodFacts: true, photoReminder: true },
+  // 進行中（未終了）のトレーニングセッション。Androidがバックグラウンドで
+  // ページを破棄しても記録済みのセットを失わないための永続化用の場所。
+  // date が今日でなければ古いセッションとして復元時に破棄する
+  // （js/workout.js の restorableSession を参照）。
+  session: { program: null, date: null, sets: [] }
 });
 
 const KEY_PREFIX = 'mt.';
@@ -70,12 +75,35 @@ function isValidFor(key, value) {
   return isArrayKey(key) ? Array.isArray(value) : isPlainObject(value);
 }
 
+// importAll 専用のレコード形状チェック。isValidFor は「配列かどうか」しか見ないため、
+// 手編集やスキーマの古いバックアップで datetime/items を欠いた meals レコードが
+// 混ざっていても素通りしてしまう(js/mealTab.js が後段でそれを前提に描画して落ちる)。
+// バックアップ全体を無効として弾くのはここだけの役割で、通常の store.set() の
+// 挙動(既存テストが前提にしている)は変えない。
+const IMPORT_RECORD_VALIDATORS = {
+  meals: (m) => m != null && typeof m.datetime === 'string' && Array.isArray(m.items)
+};
+
+function isValidRecordShapeFor(key, value) {
+  const validator = IMPORT_RECORD_VALIDATORS[key];
+  if (!validator) return true;
+  return Array.isArray(value) && value.every(validator);
+}
+
 export function createStore(storage = globalThis.localStorage) {
   const cache = new Map();
 
   // get/set で同じ正規化を通す: 配列はそのまま(クローンのみ)、オブジェクトは DEFAULTS と再帰マージ。
   function normalize(key, value) {
-    return isArrayKey(key) ? clone(value) : deepMerge(DEFAULTS[key], value);
+    if (isArrayKey(key)) return clone(value);
+    const merged = deepMerge(DEFAULTS[key], value);
+    // game.badges はネストしたフィールドのため、isValidFor は game オブジェクト
+    // そのものが object であることしか検証できない。壊れたJSON編集やインポートで
+    // badges が配列以外(数値・文字列等)に化けていても、ここで正規化しておけば
+    // .includes/spread を使う全呼び出し側(js/workoutTab.js, js/photoTab.js 等)を
+    // 個別にガードしなくて済む。
+    if (key === 'game' && !Array.isArray(merged.badges)) merged.badges = [];
+    return merged;
   }
 
   // 保存済みJSONを読み、パース失敗・型不一致を破損として検出したうえで正規化まで行う。
@@ -157,6 +185,9 @@ export function createStore(storage = globalThis.localStorage) {
     for (const key of targetKeys) {
       if (!isValidFor(key, data[key])) {
         throw new Error(`インポートに失敗しました: ${key} の形式が不正です`);
+      }
+      if (!isValidRecordShapeFor(key, data[key])) {
+        throw new Error(`インポートに失敗しました: ${key} のレコード形式が不正です`);
       }
     }
 

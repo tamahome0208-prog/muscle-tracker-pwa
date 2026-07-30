@@ -8,7 +8,8 @@ import {
   isPB,
   updateBests,
   warnsBadmintonAfterLegs,
-  weekKey
+  weekKey,
+  restorableSession
 } from '../js/workout.js';
 
 test('記録が無ければ最初はA', () => {
@@ -196,4 +197,27 @@ test('月をまたぐ脚の日の翌日も警告する', () => {
 test('年をまたぐ脚の日の翌日も警告する', () => {
   const workouts = [{ date: '2026-12-31', program: 'C' }];
   assert.equal(warnsBadmintonAfterLegs(workouts, '2027-01-01'), true);
+});
+
+// --- restorableSession（進行中セッションの永続化/復元） ---
+
+test('restorableSession: 保存済みセッションの日付が今日なら復元する', () => {
+  const stored = { program: 'B', date: '2026-07-29', sets: [{ exId: 'seated_row', weight: 30, reps: 10 }] };
+  assert.deepEqual(restorableSession(stored, '2026-07-29'), stored);
+});
+
+test('restorableSession: 日付が今日でなければ古いセッションとして復元しない', () => {
+  const stored = { program: 'B', date: '2026-07-27', sets: [{ exId: 'seated_row', weight: 30, reps: 10 }] };
+  assert.equal(restorableSession(stored, '2026-07-29'), null);
+});
+
+test('restorableSession: セッションが無ければ(program/date が null)復元しない', () => {
+  assert.equal(restorableSession({ program: null, date: null, sets: [] }, '2026-07-29'), null);
+  assert.equal(restorableSession(null, '2026-07-29'), null);
+  assert.equal(restorableSession(undefined, '2026-07-29'), null);
+});
+
+test('restorableSession: programが不正、またはsetsが配列でなければ復元しない', () => {
+  assert.equal(restorableSession({ program: 'X', date: '2026-07-29', sets: [] }, '2026-07-29'), null);
+  assert.equal(restorableSession({ program: 'A', date: '2026-07-29', sets: 'garbage' }, '2026-07-29'), null);
 });

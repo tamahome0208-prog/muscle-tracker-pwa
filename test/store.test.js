@@ -39,7 +39,7 @@ test('型が違う値も破損として初期化する', () => {
 
 test('エクスポートとインポートで往復できる', () => {
   const store = createStore(memoryStorage());
-  store.set('meals', [{ id: 'm1', kcal: 500 }]);
+  store.set('meals', [{ id: 'm1', datetime: '2026-07-29T19:00', items: [{ name: 'x', kcal: 500 }] }]);
   const json = store.exportAll();
   const store2 = createStore(memoryStorage());
   store2.importAll(json);
@@ -145,7 +145,7 @@ test('importAll 途中で setItem が失敗したら書き込み済みの分も�
   const storage = memoryStorage();
   const store = createStore(storage);
   store.set('workouts', [{ id: 'old-w' }]);
-  store.set('meals', [{ id: 'old-m' }]);
+  store.set('meals', [{ id: 'old-m', datetime: '2026-07-28T19:00', items: [] }]);
 
   const realSetItem = storage.setItem.bind(storage);
   let failOnMeals = false;
@@ -157,7 +157,7 @@ test('importAll 途中で setItem が失敗したら書き込み済みの分も�
   failOnMeals = true;
   assert.throws(() => store.importAll(JSON.stringify({
     workouts: [{ id: 'new-w' }],
-    meals: [{ id: 'new-m' }]
+    meals: [{ id: 'new-m', datetime: '2026-07-29T19:00', items: [] }]
   })));
   failOnMeals = false;
 
@@ -221,4 +221,49 @@ test('validate() は mt. 以外のキーには一切触らない', () => {
   const store = createStore(storage);
   store.validate();
   assert.equal(storage.getItem('other-app.settings'), 'untouched-value');
+});
+
+// --- 最終レビュー対応の回帰テスト ---
+
+test('session キーはデフォルトで program/date が null、sets が空配列', () => {
+  const store = createStore(memoryStorage());
+  assert.deepEqual(store.get('session'), { program: null, date: null, sets: [] });
+});
+
+test('session を保存して読み戻せる', () => {
+  const store = createStore(memoryStorage());
+  store.set('session', { program: 'A', date: '2026-07-29', sets: [{ exId: 'x', weight: 10, reps: 10 }] });
+  assert.equal(store.get('session').program, 'A');
+  assert.equal(store.get('session').sets.length, 1);
+});
+
+test('importAll は datetime/items を欠いた meals レコードを弾き、他キーも巻き込んで書き込まない', () => {
+  const store = createStore(memoryStorage());
+  store.set('workouts', [{ id: 'keep-w' }]);
+  assert.throws(
+    () => store.importAll(JSON.stringify({
+      workouts: [{ id: 'new-w' }],
+      meals: [{ id: 'broken-meal' }] // datetime も items も無い
+    })),
+    /meals.*レコード形式/
+  );
+  assert.equal(store.get('workouts')[0].id, 'keep-w');
+  assert.equal(store.get('meals').length, 0);
+});
+
+test('game.badges が配列以外(数値・文字列)に壊れていても normalize で空配列に補正される', () => {
+  const storage = memoryStorage({ 'mt.game': JSON.stringify({ badges: 42 }) });
+  const store = createStore(storage);
+  assert.deepEqual(store.get('game').badges, []);
+
+  const storage2 = memoryStorage({ 'mt.game': JSON.stringify({ badges: 'abc' }) });
+  const store2 = createStore(storage2);
+  assert.deepEqual(store2.get('game').badges, []);
+});
+
+test('game.badges の補正は set() 経由でも(保存時にも)働く', () => {
+  const store = createStore(memoryStorage());
+  const game = store.get('game');
+  store.set('game', { ...game, badges: 999 });
+  assert.deepEqual(store.get('game').badges, []);
 });

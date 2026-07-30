@@ -67,10 +67,17 @@ export function addFoodById(foodId) {
   if (saved) toast(`${food.name} を追加`);
 }
 
-/** 任意の品目群を1回の食事として記録する。保存できたかどうかを呼び出し側に返す */
-export function addItems(items, source) {
+/**
+ * 任意の品目群を1回の食事として記録する。保存できたかどうかを呼び出し側に返す。
+ * datetime を省略すると従来どおり現在時刻(nowStr())を使う。js/dayView.js は
+ * 過去日の食事を「朝/昼/夜」の固定時刻付きで記録するため、明示的な datetime
+ * ('YYYY-MM-DDTHH:MM')を渡せるようにしている。時刻を落として日付だけにしないのは、
+ * js/game.js の initialPhaseStatus が「11時より前の摂取だけを朝プロテインとして
+ * 数える」という時刻依存の判定をしているため。
+ */
+export function addItems(items, source, datetime) {
   const meals = store.get('meals');
-  meals.push({ id: newId('m'), datetime: nowStr(), items, source });
+  meals.push({ id: newId('m'), datetime: datetime ?? nowStr(), items, source });
   try {
     store.set('meals', meals);
   } catch {

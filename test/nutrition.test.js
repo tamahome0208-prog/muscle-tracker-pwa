@@ -22,8 +22,67 @@ test('その日の合計だけを集計する', () => {
   assert.equal(t.alcoholMl, 500);
 });
 
-test('記録が無い日は0になる', () => {
-  assert.deepEqual(dayTotals(MEALS, '2026-01-01'), { kcal: 0, protein: 0, alcoholMl: 0 });
+test('記録が無い日は0になる(ただしfat/carbはunknown扱い。まだ何も記録していないだけで実測ゼロではない)', () => {
+  assert.deepEqual(dayTotals(MEALS, '2026-01-01'), {
+    kcal: 0, protein: 0, alcoholMl: 0, fat: 0, carb: 0, fatKnown: false, carbKnown: false
+  });
+});
+
+// --- fat/carb集計: 「不明」と「実測0」の区別 ---
+
+test('dayTotals: MEALSの品目にはfat/carbフィールドが無い(既存の食品マスタ・記録の実態)ため、fat/carbKnownはfalseになる', () => {
+  const t = dayTotals(MEALS, '2026-07-29');
+  assert.equal(t.fat, 0);
+  assert.equal(t.carb, 0);
+  assert.equal(t.fatKnown, false);
+  assert.equal(t.carbKnown, false);
+});
+
+test('dayTotals: 全品目にfat/carbが記録されていれば合計しKnownはtrueのまま', () => {
+  const meals = [
+    { id: 'm1', datetime: '2026-08-01T07:00', items: [{ name: 'プロテイン', kcal: 120, protein: 24, fat: 1, carb: 3 }] },
+    { id: 'm2', datetime: '2026-08-01T19:00', items: [{ name: 'ごはん150g', kcal: 234, protein: 4, fat: 0.5, carb: 53 }] }
+  ];
+  const t = dayTotals(meals, '2026-08-01');
+  assert.equal(t.fat, 1.5);
+  assert.equal(t.carb, 56);
+  assert.equal(t.fatKnown, true);
+  assert.equal(t.carbKnown, true);
+});
+
+test('dayTotals: 一部の品目だけfat/carbが欠けていても、記録されている分は合計しつつKnownはfalseにする(過小合計であることを示す)', () => {
+  const meals = [
+    { id: 'm1', datetime: '2026-08-01T07:00', items: [{ name: 'プロテイン', kcal: 120, protein: 24, fat: 1, carb: 3 }] },
+    // からあげ(fat/carbフィールドが無い旧シード相当の記録)
+    { id: 'm2', datetime: '2026-08-01T19:00', items: [{ name: '唐揚げ', kcal: 600, protein: 35 }] }
+  ];
+  const t = dayTotals(meals, '2026-08-01');
+  assert.equal(t.fat, 1); // 記録されている分だけの合計(過小)
+  assert.equal(t.carb, 3);
+  assert.equal(t.fatKnown, false);
+  assert.equal(t.carbKnown, false);
+});
+
+test('dayTotals: fat/carbが0という明示的な値(記録された実測ゼロ)はKnownをfalseにしない', () => {
+  const meals = [
+    { id: 'm1', datetime: '2026-08-01T21:00', items: [{ name: '発泡酒500ml', kcal: 150, protein: 0, fat: 0, carb: 11, alcoholMl: 500 }] }
+  ];
+  const t = dayTotals(meals, '2026-08-01');
+  assert.equal(t.fat, 0);
+  assert.equal(t.carb, 11);
+  assert.equal(t.fatKnown, true);
+  assert.equal(t.carbKnown, true);
+});
+
+test('dayTotals: fat/carbが非数値(壊れたデータ)ならKnownをfalseにし、加算もしない', () => {
+  const meals = [
+    { id: 'm1', datetime: '2026-08-01T19:00', items: [{ name: 'x', kcal: 100, protein: 10, fat: 'oops', carb: null }] }
+  ];
+  const t = dayTotals(meals, '2026-08-01');
+  assert.equal(t.fat, 0);
+  assert.equal(t.carb, 0);
+  assert.equal(t.fatKnown, false);
+  assert.equal(t.carbKnown, false);
 });
 
 test('達成率を返す（一日の終わりに達成していれば警告なし）', () => {
@@ -103,7 +162,7 @@ test('bumpFoodUse は使用回数を1増やした新しい配列を返す', () =
 
 test('まだ何も記録していない日(kcal:0)は「食べなさすぎ」警告を出さない', () => {
   const t = dayTotals([], '2026-07-29');
-  assert.deepEqual(t, { kcal: 0, protein: 0, alcoholMl: 0 });
+  assert.deepEqual(t, { kcal: 0, protein: 0, alcoholMl: 0, fat: 0, carb: 0, fatKnown: false, carbKnown: false });
   const a = achievement(t, TARGETS);
   assert.ok(!a.warnings.some((w) => w.type === 'kcalFloor'));
 });
@@ -116,7 +175,9 @@ test('dayTotals は壊れたmealレコードを例外を投げずに読み飛ば
     null,
     { id: 'items-not-array', datetime: '2026-07-29T20:00', items: 'garbage' }
   ];
-  assert.deepEqual(dayTotals(meals, '2026-07-29'), { kcal: 100, protein: 10, alcoholMl: 0 });
+  assert.deepEqual(dayTotals(meals, '2026-07-29'), {
+    kcal: 100, protein: 10, alcoholMl: 0, fat: 0, carb: 0, fatKnown: false, carbKnown: false
+  });
 });
 
 test('targetsの分母が0または非有限なら達成率は0%として扱う（Infinity/NaNを出さない）', () => {

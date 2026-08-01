@@ -6,26 +6,58 @@ function toNum(v) {
   return Number.isFinite(n) ? n : 0;
 }
 
+/** item.fat / item.carb が「実際に記録された数値」かどうかを判定する（欠損=0 と混同しない） */
+function hasNumericField(item, key) {
+  const v = item[key];
+  return v !== undefined && v !== null && Number.isFinite(Number(v));
+}
+
 /**
- * その日の kcal / タンパク質 / アルコール量を合計する。
+ * その日の kcal / タンパク質 / アルコール量 / 脂質 / 炭水化物を合計する。
  *
  * meals は OCR 経路や store.importAll(配列かどうかしか検証しない)から入る
  * 信頼できない境界のデータなので、壊れたレコード1件で集計全体が落ちないよう
  * 例外を投げず読み飛ばす。js/workout.js の weeklyVolume が不正な日付の記録を
  * 除外して継続するのと同じ設計判断。
+ *
+ * 【fat/carbの「不明」と「0」の区別について】
+ * data/foods.json の既存シード食品や、このアプリがこれまでに記録してきた食事には
+ * そもそも fat/carb フィールドが存在しない(js/main.js の foodsMacroSyncedV1 移行前の
+ * データ、手入力・OCR確認画面を経ずに保存された古い記録等)。これを toNum() で
+ * 一律0として合計すると、「今日は脂質0g(=何も脂質を摂っていない実測値)」と
+ * 「今日の記録には脂質のデータが1件も無い(=未計測)」の区別がつかなくなり、
+ * ユーザーが「脂質0g」という嘘の実測値を見せられることになる(このユーザーは
+ * カロリーを削りたい衝動があるため、意図せず「脂質も足りている」という誤った
+ * 安心材料を与えかねない)。
+ * そのため fat/carb は「数値として記録されていた品目だけ」を合計し、1件でも
+ * fat/carbフィールドを持たない品目がその日にあれば fatKnown/carbKnown を false にする
+ * (=その日の合計は過小である可能性があり、真の0gではないことを示す)。
+ * その日に記録が1件も無い場合(hasItems=false)も、kcal:0 の扱いと同様「まだ何も
+ * 記録していない」であって「脂質摂取ゼロを実測した」わけではないため、
+ * fatKnown/carbKnown は false のままにする。
  */
 export function dayTotals(meals, dateStr) {
-  const totals = { kcal: 0, protein: 0, alcoholMl: 0 };
+  const totals = { kcal: 0, protein: 0, alcoholMl: 0, fat: 0, carb: 0, fatKnown: true, carbKnown: true };
+  let hasItems = false;
   for (const meal of meals) {
     if (!meal || typeof meal.datetime !== 'string') continue;
     if (!meal.datetime.startsWith(dateStr)) continue;
     if (!Array.isArray(meal.items)) continue;
     for (const item of meal.items) {
       if (!item) continue;
+      hasItems = true;
       totals.kcal += toNum(item.kcal);
       totals.protein += toNum(item.protein);
       totals.alcoholMl += toNum(item.alcoholMl);
+      if (hasNumericField(item, 'fat')) totals.fat += Number(item.fat);
+      else totals.fatKnown = false;
+      if (hasNumericField(item, 'carb')) totals.carb += Number(item.carb);
+      else totals.carbKnown = false;
     }
+  }
+  if (!hasItems) {
+    totals.fatKnown = false;
+    totals.carbKnown = false;
   }
   return totals;
 }

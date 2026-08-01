@@ -1,9 +1,19 @@
 import { $, onShow, todayStr, icon } from './ui.js';
 import { weeklyVolume, weekKey, previousWeekKey, weekFeasibility } from './workout.js';
-import { bodySeries, bodyDiff, latestBody } from './body.js';
+import { bodySeries, bodyDiff, latestBody, currentBodyweight } from './body.js';
 import { radarData, BADGES } from './game.js';
 import { loadChartJs, drawVolumeChart, drawBodyChart, drawRadarChart } from './charts.js';
 import { initDayView, renderDayView } from './dayView.js';
+import { dayTotals } from './nutrition.js';
+import {
+  estimateFfmKg,
+  dailyExerciseKcal,
+  energyAvailability,
+  eaFloorKcal,
+  eaOptimalKcal,
+  equationMaintenanceEstimate,
+  estimateMaintenance
+} from './energy.js';
 
 let store;
 
@@ -38,6 +48,9 @@ export function renderRecordTab() {
     <div class="card">
       <h2 style="margin-top:0">部位レベル</h2>
       <canvas id="radarChart"></canvas>
+    </div>
+    <div class="card">
+      ${renderEnergyCard()}
     </div>
     <div class="card">
       <h2 style="margin-top:0">カレンダー</h2>
@@ -89,6 +102,70 @@ function onRecordTabClick(e) {
 
 function fmt(n) {
   return (n >= 0 ? '+' : '') + n.toFixed(1);
+}
+
+/**
+ * 「エネルギー可用性(EA)」カード。推定維持カロリー・EAフロア・現在のEAをまとめて表示する
+ * (js/energy.js 参照)。式そのものを画面に出す方針: 数字だけ見せて仕組みを隠すと、
+ * このユーザーがまた「もっと削ってもいいはず」と思ったときに検算できない。
+ *
+ * データが足りない場合は自信のある数値のふりをせず、その旨をそのまま表示する
+ * (estimateMaintenance の method: 'insufficient'/'equation' をそのまま文言に反映する)。
+ */
+function renderEnergyCard() {
+  const profile = store.get('profile');
+  const meals = store.get('meals');
+  const workouts = store.get('workouts');
+  const badminton = store.get('badminton');
+  const body = store.get('body');
+  const latest = latestBody(body);
+  const today = todayStr();
+
+  const ffmKg = latest ? estimateFfmKg(latest) : null;
+  const weightForExercise = currentBodyweight(body, profile);
+  const exerciseKcal = dailyExerciseKcal(workouts, badminton, today, weightForExercise);
+
+  const equationEstimate = equationMaintenanceEstimate({
+    ffmKg,
+    weightKg: profile.weight,
+    heightM: profile.height / 100,
+    ageYears: profile.age,
+    isMale: profile.sex === 'male',
+    exerciseKcalPerDay: exerciseKcal
+  });
+  const maintenance = estimateMaintenance(meals, body, today, equationEstimate);
+
+  const todayTotals = dayTotals(meals, today);
+  const hasFfm = Number.isFinite(ffmKg) && ffmKg > 0;
+  const floor = hasFfm ? eaFloorKcal(ffmKg, exerciseKcal) : null;
+  const optimal = hasFfm ? eaOptimalKcal(ffmKg, exerciseKcal) : null;
+  const currentEA = hasFfm && todayTotals.kcal > 0 ? energyAvailability(todayTotals.kcal, exerciseKcal, ffmKg) : null;
+
+  const maintenanceBlock = maintenance.method === 'insufficient'
+    ? `<p class="muted">推定維持カロリー: データ不足のため算出できません。${maintenance.note}</p>`
+    : `<p>推定維持カロリー: <strong>${maintenance.kcal}kcal</strong>
+        (${maintenance.method === 'trend' ? '直近の体重トレンドからの実測ベース推定' : '予測式によるおおまかな出発点の推定(実測ではありません)'})</p>
+       <p class="muted">${maintenance.note}</p>`;
+
+  const eaBlock = hasFfm
+    ? `<p>EAフロア(警告ライン): <strong>${Math.round(floor)}kcal</strong>
+        <span class="muted">= 30 × FFM(${ffmKg.toFixed(1)}kg) + 運動消費(${Math.round(exerciseKcal)}kcal/日)</span></p>
+       <p>EA最適ライン: <strong>${Math.round(optimal)}kcal</strong>
+        <span class="muted">= 45 × FFM + 運動消費</span></p>
+       ${currentEA !== null
+         ? `<p>今日のEA: <strong>${currentEA.toFixed(1)} kcal/kg FFM/日</strong>
+             <span class="muted">= (摂取${Math.round(todayTotals.kcal)} − 運動${Math.round(exerciseKcal)}) / FFM${ffmKg.toFixed(1)}kg</span></p>`
+         : '<p class="muted">今日はまだ食事記録が無いため、今日のEAはまだ計算できません。</p>'}
+       <p class="muted">EA 30 kcal/kg FFM/日はACSM/AND/DC 2016の共同ポジションスタンドが根拠の警告ラインで、
+        「下回った瞬間に何かが壊れる崖」ではありません。この閾値は元々女性のデータから
+        導かれたもので、男性についてはより低く・より不確実な値しか根拠が無い
+        (参考: Koehler et al. 2016は4日間15でもテストステロンの有意な変化なし)ため、
+        保守的な目安として使っています。</p>`
+    : '<p class="muted">InBody記録が無いため、EAフロア・現在のEAは計算できません。ホームからInBody(体組成)を記録すると表示されます。</p>';
+
+  return `<h2 style="margin-top:0">エネルギー可用性(EA)</h2>
+    ${maintenanceBlock}
+    ${eaBlock}`;
 }
 
 // weeklyVolume の系列は疎（トレーニングが無い週は要素が無い）。

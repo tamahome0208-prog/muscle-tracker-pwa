@@ -1,4 +1,6 @@
-import { $, onShow, toast, esc } from './ui.js';
+import { $, onShow, toast, esc, todayStr } from './ui.js';
+import { estimateFfmKg, eaFloorKcal, dailyExerciseKcal } from './energy.js';
+import { latestBody, currentBodyweight } from './body.js';
 
 let store;
 
@@ -84,6 +86,24 @@ export function renderSettingsTab() {
       return;
     }
 
+    // EA(エネルギー可用性)フロア(js/energy.js の eaFloorKcal: 30 × FFM + 運動消費kcal、
+    // ACSM/AND/DC 2016)より低い警告ラインを設定しようとしていないか確認する。
+    // ブロックはしない(このユーザー自身がEAフロアを下回る値を意図的に設定したい
+    // 場面もありうるため)が、その場合に何が起きるか(EAの目安を下回っても警告が
+    // 出なくなる)を数字付きで伝える。InBody記録が無ければ判定できないので何も言わない。
+    const body = store.get('body');
+    const latest = latestBody(body);
+    const ffmKg = latest ? estimateFfmKg(latest) : null;
+    let floorWarning = null;
+    if (Number.isFinite(ffmKg) && ffmKg > 0) {
+      const weightForExercise = currentBodyweight(body, { ...profile, weight });
+      const exerciseKcal = dailyExerciseKcal(store.get('workouts'), store.get('badminton'), todayStr(), weightForExercise);
+      const eaFloor = eaFloorKcal(ffmKg, exerciseKcal);
+      if (Number.isFinite(eaFloor) && eaFloor > 0 && kcalFloor < eaFloor) {
+        floorWarning = `保存しました。ただしエネルギー可用性(EA)の目安では約${Math.round(eaFloor)}kcalが警告ラインの目安です。これより低く設定すると、その目安を下回っても「食べなさすぎ」警告が出ません`;
+      }
+    }
+
     // profile.weight はInBody記録が無いときのvolume計算のフォールバックそのものに
     // なったため、ここでの保存失敗を黙って無視できない(他の保存パスと同様に
     // try/catchで失敗を検知し、ボタンが何も言わずに無反応になるのを防ぐ)。
@@ -93,7 +113,7 @@ export function renderSettingsTab() {
       toast('保存できませんでした（端末の空き容量を確認してください）');
       return;
     }
-    toast('目標を保存しました');
+    toast(floorWarning ?? '目標を保存しました', floorWarning ? 6000 : undefined);
   });
 
   $('#btnSaveSettings').addEventListener('click', () => {

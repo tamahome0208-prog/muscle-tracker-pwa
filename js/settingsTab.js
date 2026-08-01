@@ -1,5 +1,8 @@
 import { $, onShow, toast, esc, todayStr } from './ui.js';
-import { estimateFfmKg, eaFloorKcal, dailyExerciseKcal } from './energy.js';
+import {
+  estimateFfmKg, eaFloorKcal, dailyExerciseKcal,
+  macroTargets, estimateMaintenance, equationMaintenanceEstimate
+} from './energy.js';
 import { latestBody, currentBodyweight } from './body.js';
 
 let store;
@@ -27,6 +30,10 @@ export function renderSettingsTab() {
       <div class="ex-ctrl">発泡酒 <input type="number" inputmode="numeric" id="tAlcohol" value="${t.alcoholMl}" style="width:90px">ml</div>
       <p class="muted">警告ラインを下回った日は「食べなさすぎ」の警告が出ます。摂取を削るほど筋肉が落ちるため、下限側を守る設計です。</p>
       <button id="btnSaveTargets" class="primary">保存</button>
+    </div>
+
+    <div class="card">
+      ${renderMacroCard()}
     </div>
 
     <div class="card">
@@ -158,4 +165,86 @@ export function renderSettingsTab() {
       toast(err.message);
     }
   });
+}
+
+/**
+ * PFC(タンパク質・脂質・炭水化物)の計算目標カード(js/energy.js の macroTargets)。
+ * 式そのものを画面に出す方針(js/recordTab.js の renderEnergyCard と同じ考え方):
+ * 数字だけ見せて仕組みを隠すと、このユーザーがまた「もっと削ってもいいはず」と
+ * 思ったときに検算できない。
+ *
+ * energyKcal には targets.kcalMin(このアプリが「最低限ここまでは食べる」としている値)を使う。
+ * inDeficit は推定維持カロリー(estimateMaintenance)と比べて、kcalMinがそれを下回っていれば
+ * 赤字期とみなす。維持カロリーが不明(データ不足)なら赤字だと決めつけない(false)。
+ *
+ * status: 'energyTooLow' のときは、緩和後もなお炭水化物が目安に届かないという結果を
+ * そのまま算式つきで表示し、数値を静かに帳尻合わせしない(このユーザーが1,200kcal台への
+ * 削減を繰り返し提案してきた経緯を踏まえた設計)。
+ */
+function renderMacroCard() {
+  const profile = store.get('profile');
+  const targets = profile.targets;
+  const body = store.get('body');
+  const latest = latestBody(body);
+  const weightForExercise = currentBodyweight(body, profile);
+  const ffmResult = estimateFfmKg(latest, weightForExercise);
+  const ffmKg = ffmResult ? ffmResult.ffmKg : null;
+  const ffmEstimated = ffmResult ? ffmResult.estimated : false;
+  const exerciseKcal = dailyExerciseKcal(store.get('workouts'), store.get('badminton'), todayStr(), weightForExercise);
+
+  if (!ffmResult) {
+    return `<h2 style="margin-top:0">PFC目標(計算値)</h2>
+      <p class="muted">体重が記録されていないため、タンパク質・脂質・炭水化物の目標を計算できません。</p>`;
+  }
+
+  const equationEstimate = equationMaintenanceEstimate({
+    ffmKg,
+    weightKg: profile.weight,
+    heightM: profile.height / 100,
+    ageYears: profile.age,
+    isMale: profile.sex === 'male',
+    exerciseKcalPerDay: exerciseKcal
+  });
+  const maintenance = estimateMaintenance(store.get('meals'), body, todayStr(), equationEstimate);
+  const inDeficit = Number.isFinite(maintenance.kcal) && targets.kcalMin < maintenance.kcal;
+
+  const macro = macroTargets({ energyKcal: targets.kcalMin, ffmKg, weightKg: weightForExercise, inDeficit });
+  if (!macro) {
+    return `<h2 style="margin-top:0">PFC目標(計算値)</h2>
+      <p class="muted">目標エネルギー・体重・FFMのいずれかが不正なため計算できません。</p>`;
+  }
+
+  const ffmLabel = ffmEstimated ? `${ffmKg.toFixed(1)}kg(推定)` : `${ffmKg.toFixed(1)}kg`;
+  const perFfmCoef = inDeficit ? 2.8 : 2.4;
+
+  const statusBlock = macro.status === 'energyTooLow'
+    ? `<p class="warn danger" style="margin:8px 0">
+         <strong>カロリー目標(${targets.kcalMin}kcal)が低すぎます。</strong><br>
+         タンパク質(${macro.proteinG.toFixed(1)}g)・脂質(${macro.fatG.toFixed(1)}g)を下限まで下げても、
+         炭水化物は ${targets.kcalMin} − 4×${macro.proteinG.toFixed(1)} − 9×${macro.fatG.toFixed(1)} = ${(macro.carbG * 4).toFixed(1)}kcal
+         (÷4 = ${macro.carbG.toFixed(1)}g、体重1kgあたり${macro.carbPerKg.toFixed(1)}g)にしかならず、
+         目安の体重×3g(${(3 * weightForExercise).toFixed(0)}g)に届きません。数値を静かに帳尻合わせせず、
+         そのままお見せしています。カロリー目標そのものを引き上げてください。</p>`
+    : macro.status === 'relaxed'
+      ? `<p class="muted">炭水化物の目安を満たすため、タンパク質・脂質の一部を下限まで緩めています(下記の注記参照)。</p>`
+      : '';
+
+  const notesBlock = macro.notes.length
+    ? `<p class="muted">${macro.notes.map(esc).join('<br>')}</p>`
+    : '';
+
+  return `<h2 style="margin-top:0">PFC目標(計算値)</h2>
+    <p class="muted">除脂肪量(FFM) ${ffmLabel} ・ 体重 ${weightForExercise.toFixed(1)}kg ・
+      目標エネルギー ${targets.kcalMin}kcal(${inDeficit ? 'エネルギー赤字期の目安' : '通常時の目安'})</p>
+    <p>タンパク質: <strong>${macro.proteinG.toFixed(1)}g</strong>
+      <span class="muted">= ${perFfmCoef}×FFM、[体重×1.6, 体重×2.2]の範囲にクランプ</span></p>
+    <p>脂質: <strong>${macro.fatG.toFixed(1)}g</strong>
+      <span class="muted">= max(体重×0.5, 20%E÷9)</span></p>
+    <p>炭水化物: <strong>${macro.carbG.toFixed(1)}g</strong>(体重1kgあたり${macro.carbPerKg.toFixed(1)}g)
+      <span class="muted">= (E − 4×タンパク質 − 9×脂質) ÷ 4</span></p>
+    ${statusBlock}
+    ${notesBlock}
+    <p class="muted">出典の要点: タンパク質はRefalo/Trexler/Helms 2025・Morton 2018・ISSN 2017・Helms 2014に基づきFFM基準・赤字期は係数を引き上げ。
+      脂質はACSM 2016・Ruiz-Castellano 2021・日本人の食事摂取基準2025年版の20〜30%Eの下限を採用。
+      炭水化物はACSM 2016の運動量別レンジ(軽度3〜5g/kg)の下限をトリップワイヤーにしています。</p>`;
 }

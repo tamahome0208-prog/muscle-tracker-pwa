@@ -50,16 +50,37 @@ test('rmrTenHaaf: 不正な入力は0を返す', () => {
 
 // --- estimateFfmKg ---
 
-test('estimateFfmKg: 体重60kg・体脂肪率20%ならFFM48kg', () => {
-  assert.equal(estimateFfmKg({ weight: 60, fatPct: 20 }), 48);
+test('estimateFfmKg: InBody記録(体重60kg・体脂肪率20%)があれば実測ベースでFFM48kg・estimated:false', () => {
+  const r = estimateFfmKg({ weight: 60, fatPct: 20 });
+  assert.equal(r.ffmKg, 48);
+  assert.equal(r.estimated, false);
 });
 
-test('estimateFfmKg: 不正な入力はnull', () => {
+test('estimateFfmKg: InBody記録が不正でもfallbackWeightKgがあれば体重から概算し、estimated:trueで返す', () => {
+  const r1 = estimateFfmKg({ weight: 0, fatPct: 20 }, 60);
+  assert.equal(r1.ffmKg, 48); // 60 * (1 - 20/100)
+  assert.equal(r1.estimated, true);
+
+  const r2 = estimateFfmKg(null, 60);
+  assert.equal(r2.ffmKg, 48);
+  assert.equal(r2.estimated, true);
+
+  const r3 = estimateFfmKg({ weight: 60, fatPct: 100 }, 60); // fatPctが不正でも同様にフォールバック
+  assert.equal(r3.ffmKg, 48);
+  assert.equal(r3.estimated, true);
+});
+
+test('estimateFfmKg: InBody記録が有効ならfallbackWeightKgより実測を優先する', () => {
+  const r = estimateFfmKg({ weight: 55, fatPct: 15 }, 999);
+  assert.equal(r.ffmKg, 55 * 0.85);
+  assert.equal(r.estimated, false);
+});
+
+test('estimateFfmKg: InBody記録もfallbackWeightKgも無ければnull(体組成・体重ともに不明)', () => {
   assert.equal(estimateFfmKg({ weight: 0, fatPct: 20 }), null);
-  assert.equal(estimateFfmKg({ weight: 60, fatPct: -1 }), null);
-  assert.equal(estimateFfmKg({ weight: 60, fatPct: 100 }), null);
-  assert.equal(estimateFfmKg({ weight: 60 }), null);
   assert.equal(estimateFfmKg(null), null);
+  assert.equal(estimateFfmKg(null, 0), null);
+  assert.equal(estimateFfmKg(null, 'oops'), null);
 });
 
 // --- energyAvailability / eaFloorKcal / eaOptimalKcal ---
@@ -135,16 +156,18 @@ test('dailyExerciseKcal: 直近7日に筋トレ3回・バドミントン2回を�
   ];
   const weight = 60;
 
-  // 手計算: netMET resistance = 2.5, kcal/分 = 2.5*3.5*60/200 = 2.625
-  //         1セッション = 18セット×2.5分/セット = 45分 → 2.625*45 = 118.125kcal、3回で354.375kcal
+  // 手計算: netMET resistance = 4.0(MET5.0-1。意図的に上側に倒した値、js/energy.js参照)
+  //         kcal/分 = 4.0*3.5*60/200 = 4.2
+  //         1セッション = 18セット×2.5分/セット = 45分 → 4.2*45 = 189kcal、3回で567kcal
   //         netMET badminton = 4.5, kcal/分 = 4.5*3.5*60/200 = 4.725
   //         1セッション60分 → 283.5kcal、2回で567kcal
-  //         週合計 921.875kcal ÷ 7 = 131.696...kcal/日
+  //         週合計 1134kcal ÷ 7 = 162kcal/日
   const result = dailyExerciseKcal(workouts, badminton, TODAY, weight);
-  const expectedWorkoutKcal = 2.5 * 3.5 * weight / 200 * (18 * 2.5) * 3;
+  const expectedWorkoutKcal = 4.0 * 3.5 * weight / 200 * (18 * 2.5) * 3;
   const expectedBadmintonKcal = 4.5 * 3.5 * weight / 200 * 60 * 2;
   const expected = (expectedWorkoutKcal + expectedBadmintonKcal) / 7;
   assert.ok(Math.abs(result - expected) < 1e-9);
+  assert.equal(Math.round(result), 162);
   assert.ok(result > 0);
 });
 

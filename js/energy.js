@@ -72,35 +72,61 @@ export function rmrTenHaaf({ weightKg, heightM, ageYears, isMale }) {
   return kJ / KCAL_PER_KJ;
 }
 
+// InBody記録が無いときにFFMを概算するための仮の体脂肪率。
+// 出典: このユーザー属性(162cm/60kg/初心者男性)における一般的な体脂肪率のレンジの
+// 目安であり、実測ではない(js/store.jsのDEFAULT_KCAL_FLOORが仮定しているFFM48kg
+// = 60kg×(1-20%)と揃えてある)。
+//
+// 【回帰修正の経緯】以前はInBody記録が無いと ffmKg が null になり、js/nutrition.js の
+// achievement() は EA(エネルギー可用性)経路を完全に諦めて固定の targets.kcalFloor に
+// フォールバックしていた。これは「体組成を測っていない=運動もしていない扱い」を意味し、
+// 実際にトレーニングしているのに運動消費の項が丸ごと落ちる(floor = 30×FFM+運動消費 の
+// +運動消費が0になる)という安全側と逆方向の回帰だった。このユーザーは今まさにInBody
+// 未測定の状態なので、この経路は現実に起こる。
+const ASSUMED_BODYFAT_PCT_NO_INBODY = 20;
+
 /**
- * InBody記録(weight, fatPct)から除脂肪量(FFM)を概算する。
- * FFM = 体重 × (1 − 体脂肪率/100)。筋肉量(muscle)ではなくこちらを使う: FFMは筋肉に加えて
- * 骨・内臓・水分等も含むため、muscleそのものより実態に近い。
- * weight/fatPctが数値化できない・0以下・fatPctが100以上など不正な場合は null を返す
- * (呼び出し側は null を「FFM不明」として扱い、EA関連の計算をスキップすること)。
+ * FFM(除脂肪量)を返す。InBody記録(weight, fatPct)が有効ならそこから実測ベースで計算し、
+ * `estimated: false` を返す。無効/欠損なら fallbackWeightKg(通常は profile.weight)と
+ * ASSUMED_BODYFAT_PCT_NO_INBODY から概算し、`estimated: true` を返す(呼び出し側は
+ * この違いを画面上でも表現し、実測と同じ確度で見せないこと)。
+ * どちらも得られなければ null(EA関連の計算をスキップすること)。
  */
-export function estimateFfmKg(bodyRecord) {
+export function estimateFfmKg(bodyRecord, fallbackWeightKg = null) {
   const weight = positiveOrNull(bodyRecord?.weight);
   const fatPct = Number(bodyRecord?.fatPct);
-  if (weight === null || !Number.isFinite(fatPct) || fatPct < 0 || fatPct >= 100) return null;
-  return weight * (1 - fatPct / 100);
+  if (weight !== null && Number.isFinite(fatPct) && fatPct >= 0 && fatPct < 100) {
+    return { ffmKg: weight * (1 - fatPct / 100), estimated: false };
+  }
+  const fallbackWeight = positiveOrNull(fallbackWeightKg);
+  if (fallbackWeight === null) return null;
+  return { ffmKg: fallbackWeight * (1 - ASSUMED_BODYFAT_PCT_NO_INBODY / 100), estimated: true };
 }
 
 // 2024 Adult Compendium of Physical Activities のMETs値。
 // 出典: Herrmann SD, et al. "2024 Adult Compendium of Physical Activities." J Sport Health Sci.
 // - バドミントン(社会人・シングルス/ダブルス): 5.5 METs
-// - レジスタンストレーニング(8〜15回、一般的な強度): 3.5 METs
-// - スクワット/デッドリフトのような高強度の複合種目: 5.0 METs
-//   (本アプリの種目定義 data/exercises.json は全てマシン系種目であり、フリーウェイトの
-//   スクワット/デッドリフトに相当する種目が無いため、レジスタンス全般の3.5を一律で使う。
-//   新しく種目が追加されて該当するようになった場合はこの前提を見直すこと)
+// - レジスタンストレーニング(8〜15回、軽〜中等度の負荷): 3.5 METs
+// - スクワット/デッドリフトのような高強度の複合種目(vigorous effort): 5.0 METs
+//
+// 【意図的に不確実性を上側へ倒している箇所】レジスタンストレーニングのMETは
+// Compendiumの「3.5(軽〜中等度)」ではなく「5.0(高強度)」を使う。本アプリの種目は
+// マシン系でスクワット/デッドリフトそのものではないが、このアプリの指示は1〜3RIR
+// (限界の1〜3回手前)であり、Compendiumの「8〜15回・軽〜中等度」よりも
+// vigorous effort側の実態に近いと判断した。
+// なぜ高い方に倒すか: floor = 30×FFM + 運動消費 なので、運動消費を過小に見積もると
+// floorが下がり「食べなさすぎ」警告が出にくくなる。同時に EA=(摂取-運動)/FFM も
+// 過大に(=実際より安全に)出る。つまりこの不確実性は、低く見積もる側に倒すと
+// 安全性チェックが緩む方向にずれる。逆に高く見積もった場合の実害は「floorが本来より
+// 少し高く出て、まだ十分食べられているのに警告が出る」程度であり、この非対称性から
+// 高い方の値を採用する。
 //
 // 「正味(net)METs」を使う理由: 1 MET(安静時代謝)は既にRMRの計算に含まれているため、
 // 運動によって「追加で」消費した分だけをEAの計算に載せる必要がある。そのままのMETsを
 // 使うと安静時代謝を二重に数えてしまう(RMR側とexercise側の両方に安静分が乗る)。
 const MET = {
   badminton: 5.5,
-  resistance: 3.5
+  resistance: 5.0 // 上記コメント参照: 3.5(Compendium「軽〜中等度」)ではなく意図的に5.0を使う
 };
 const NET_MET = {
   badminton: MET.badminton - 1,
@@ -109,10 +135,12 @@ const NET_MET = {
 
 // レジスタンストレーニングの実測消費は休憩を含めて概ね6 kcal/分程度という報告がある。
 // このモジュールでは体重に応じて個別化できるMETベースの式(上記NET_MET.resistance)を
-// 一貫して使う。6 kcal/分という数字は主に体格の大きい被験者での測定値と見られ、
-// このユーザー(162cm/60kg、マシン中心・軽めの負荷の初心者)にそのまま当てはめると
-// 過大評価になりうるため採用しなかった。EPOC(運動後過剰酸素消費)は14〜27kcal程度と
-// 僅かなため、"追い焚き"のボーナスは足さない(この点はMETベースの式にも共通する注記)。
+// 一貫して使う。162cm/60kgのこのユーザーでは、上のMET=5.0(正味4.0)換算で
+// 4.0×3.5×60/200=4.2 kcal/分となり、6 kcal/分という(主に体格の大きい被験者での
+// 測定値と見られる)数字とオーダーとしては近い水準になった。6 kcal/分をそのまま
+// 一律に採用しない理由は、体格による個人差を無視することになるため。
+// EPOC(運動後過剰酸素消費)は14〜27kcal程度と僅かなため、"追い焚き"のボーナスは
+// 足さない(この点はMETベースの式にも共通する注記)。
 
 /** METs(正味)と体重から kcal/分 を求める標準式: kcal/分 = MET × 3.5 × 体重(kg) / 200 */
 function kcalPerMinute(netMet, weightKg) {

@@ -2,7 +2,7 @@ import { $, onShow, toast, todayStr, nowStr, newId, esc, icon } from './ui.js';
 import { dayTotals, achievement, sortFoodsByUse, bumpFoodUse } from './nutrition.js';
 import { isBarcodeSupported, scanJan, lookupJan } from './barcode.js';
 import { analyzeMealPhoto, analyzeReceipt, OcrError } from './ocr.js';
-import { estimateFfmKg, dailyExerciseKcal } from './energy.js';
+import { estimateFfmKg, dailyExerciseKcal, macroTargets, estimateMaintenance, equationMaintenanceEstimate } from './energy.js';
 import { latestBody, currentBodyweight } from './body.js';
 
 let store;
@@ -64,9 +64,74 @@ export function renderStatusBar() {
     `${totals.alcoholMl} / ${targets.alcoholMl}ml`,
     a.alcoholOver ? 'over' : '');
 
-  $('#warnings').innerHTML = a.warnings
-    .map((w) => `<div class="warn ${w.level}">${w.message}</div>`)
-    .join('');
+  const warningsHtml = a.warnings.map((w) => `<div class="warn ${w.level}">${w.message}</div>`);
+
+  // 脂質・炭水化物はタンパク質・カロリーと違って「死守」する数値ではないため、
+  // 同じ太さのバーをもう2本増やさない(このタブは筋トレの合間に見る前提の画面で、
+  // 管理する数値を2つだけに絞ってあるという設計そのものを薄めてしまう)。
+  // ここでは値だけを小さく・muted色で添える二次的な行にする(js/energy.js の
+  // macroTargets 参照)。
+  const macro = computeMacroTargets(profile, body, weightForExercise, exerciseKcal, ffmKg);
+  renderMacroSecondary(totals, macro);
+  if (macro && macro.status === 'energyTooLow') {
+    warningsHtml.push(`<div class="warn danger">${esc(macro.notes[macro.notes.length - 1] ?? 'カロリー目標が低すぎて炭水化物の目安を満たせません。設定タブで詳細を確認してください。')}</div>`);
+  }
+
+  $('#warnings').innerHTML = warningsHtml.join('');
+}
+
+/**
+ * PFC目標(js/energy.js の macroTargets)を計算する。energyKcal には targets.kcalMin
+ * (このアプリが「最低限ここまでは食べる」としている値)を使う。inDeficit は
+ * 推定維持カロリー(js/energy.js の estimateMaintenance)と比べて、kcalMinがそれを
+ * 下回っていれば赤字期とみなす。維持カロリーが分からない(データ不足)場合は、
+ * 赤字だと決めつけない(inDeficit: false)。誤って赤字扱いにすると、タンパク質が
+ * 2.8×FFMまで引き上がり、炭水化物のトリップワイヤーに不要に引っかかりやすくなるため。
+ * ffmKg/weightKgが無効ならmacroTargetsはnullを返す(呼び出し側は「計算不能」を表示すること)。
+ */
+export function computeMacroTargets(profile, body, weightForExercise, exerciseKcal, ffmKg) {
+  const targets = profile.targets;
+  const meals = store.get('meals');
+  const equationEstimate = equationMaintenanceEstimate({
+    ffmKg,
+    weightKg: profile.weight,
+    heightM: profile.height / 100,
+    ageYears: profile.age,
+    isMale: profile.sex === 'male',
+    exerciseKcalPerDay: exerciseKcal
+  });
+  const maintenance = estimateMaintenance(meals, body, todayStr(), equationEstimate);
+  const inDeficit = Number.isFinite(maintenance.kcal) && targets.kcalMin < maintenance.kcal;
+  return macroTargets({ energyKcal: targets.kcalMin, ffmKg, weightKg: weightForExercise, inDeficit });
+}
+
+/**
+ * 脂質・炭水化物の二次表示。未計測データは「0g」ではなく不明であることを示す。
+ * その日まだ何も記録が無い(totals.kcalが0)場合は achievement() の「食べなさすぎ」判定と
+ * 同じ約束で「まだ記録していないだけ」の状態とみなし、"0g+" ではなく "--" にする
+ * (0gという実測値に見せない・未記録という状態自体をさらに紛らわしくしない、の両方を満たす)。
+ * 一部の品目だけデータが無い(記録はあるが過小合計)場合は "Ng+" とアスタリスクで示す。
+ */
+function renderMacroSecondary(totals, macro) {
+  const el = $('#macroSecondary');
+  if (!el) return;
+  const fatTarget = macro ? Math.round(macro.fatG) : null;
+  const carbTarget = macro ? Math.round(macro.carbG) : null;
+  const noRecordYet = totals.kcal === 0;
+
+  const unknownMark = (label) =>
+    `<span class="macro-unknown" title="${label}のデータが無い品目が含まれています(実測ではありません)">*</span>`;
+
+  const fatText = totals.fatKnown
+    ? `${Math.round(totals.fat)}g`
+    : noRecordYet ? '--' : `${Math.round(totals.fat)}g+ ${unknownMark('脂質')}`;
+  const carbText = totals.carbKnown
+    ? `${Math.round(totals.carb)}g`
+    : noRecordYet ? '--' : `${Math.round(totals.carb)}g+ ${unknownMark('炭水化物')}`;
+
+  el.innerHTML = `
+    <span>脂質 ${fatText}${fatTarget !== null ? ` / ${fatTarget}g` : ''}</span>
+    <span>炭水化物 ${carbText}${carbTarget !== null ? ` / ${carbTarget}g` : ''}</span>`;
 }
 
 /** ワンタップで1品追加する。食品の使用回数も増やして並び順を育てる */
@@ -78,7 +143,15 @@ export function addFoodById(foodId) {
   // 遅れてしまい、「よく食べるものが1タップで届く位置に来る」という
   // このタブの存在意義そのものが体感で1回遅れて壊れる。
   store.set('foods', bumpFoodUse(store.get('foods'), foodId));
-  const saved = addItems([{ name: food.name, kcal: food.kcal, protein: food.protein, alcoholMl: food.alcoholMl ?? 0 }], 'tap');
+  // food.fat/food.carb はシード食品(data/foods.json)やOCR経由で登録された食品には
+  // あるが、旧バージョンで登録済みのバーコード食品(js/main.js の foodsMacroSyncedV1
+  // 移行の対象外)には無いことがある。無い場合はプロパティごと省略し、undefinedを
+  // 明示的な0として保存しない(js/nutrition.js の dayTotals が「不明」として
+  // 扱えるようにするため)。
+  const item = { name: food.name, kcal: food.kcal, protein: food.protein, alcoholMl: food.alcoholMl ?? 0 };
+  if (food.fat !== undefined) item.fat = food.fat;
+  if (food.carb !== undefined) item.carb = food.carb;
+  const saved = addItems([item], 'tap');
   // addItems が保存失敗のtoastを既に出している場合、ここで成功toastを重ねて
   // 上書きしてしまうと「保存できませんでした」が一瞬で消え、実際には保存されて
   // いないのに追加成功したように見えてしまう。
@@ -209,6 +282,8 @@ function openItemForm({ title, nameLabel = '品目名', onSave }) {
     <div class="ex-ctrl"><input type="text" id="ifName" placeholder="${esc(nameLabel)}" style="flex:1"></div>
     <div class="ex-ctrl">カロリー <input type="number" inputmode="numeric" id="ifKcal" value="0" style="width:90px">kcal</div>
     <div class="ex-ctrl">タンパク質 <input type="number" inputmode="decimal" id="ifProtein" value="0" style="width:90px">g</div>
+    <div class="ex-ctrl">脂質 <input type="number" inputmode="decimal" id="ifFat" value="0" style="width:90px">g</div>
+    <div class="ex-ctrl">炭水化物 <input type="number" inputmode="decimal" id="ifCarb" value="0" style="width:90px">g</div>
     <div class="chips">
       <button id="ifSave" class="primary">保存</button>
       <button id="ifCancel">やめる</button>
@@ -226,19 +301,21 @@ function openItemForm({ title, nameLabel = '品目名', onSave }) {
     }
     const kcal = Number(dialog.querySelector('#ifKcal').value);
     const protein = Number(dialog.querySelector('#ifProtein').value);
-    if (Number.isNaN(kcal) || Number.isNaN(protein)) {
+    const fat = Number(dialog.querySelector('#ifFat').value);
+    const carb = Number(dialog.querySelector('#ifCarb').value);
+    if ([kcal, protein, fat, carb].some((n) => Number.isNaN(n))) {
       toast('数値が読めませんでした');
       return;
     }
     dialog.remove();
-    onSave({ name, kcal, protein });
+    onSave({ name, kcal, protein, fat, carb });
   });
 }
 
 function openManualDialog() {
   openItemForm({
     title: '手入力',
-    onSave: ({ name, kcal, protein }) => addItems([{ name, kcal, protein }], 'manual')
+    onSave: ({ name, kcal, protein, fat, carb }) => addItems([{ name, kcal, protein, fat, carb }], 'manual')
   });
 }
 
@@ -284,8 +361,8 @@ async function scanBarcode() {
   openItemForm({
     title: `未登録の商品です（${jan}）`,
     nameLabel: '品名（次回から自動登録されます）',
-    onSave: ({ name, kcal, protein }) => {
-      const food = { id: `jan_${jan}`, jan, name, unit: '個', kcal, protein, useCount: 0 };
+    onSave: ({ name, kcal, protein, fat, carb }) => {
+      const food = { id: `jan_${jan}`, jan, name, unit: '個', kcal, protein, fat, carb, useCount: 0 };
       store.set('foods', [...store.get('foods'), food]);
       addFoodById(food.id);
     }
@@ -329,7 +406,9 @@ function confirmItems(items, source) {
         <label><input type="checkbox" data-pick="${idx}" checked> ${esc(i.name)}</label>
         <div class="ex-ctrl">
           <input type="number" inputmode="numeric" data-kcal="${idx}" value="${i.kcal}" style="width:80px"> kcal
-          <input type="number" inputmode="decimal" data-protein="${idx}" value="${i.protein}" style="width:70px"> g
+          <input type="number" inputmode="decimal" data-protein="${idx}" value="${i.protein}" style="width:70px"> gP
+          <input type="number" inputmode="decimal" data-fat="${idx}" value="${i.fat ?? 0}" style="width:70px"> gF
+          <input type="number" inputmode="decimal" data-carb="${idx}" value="${i.carb ?? 0}" style="width:70px"> gC
           ${Number(i.alcoholMl) > 0 ? `<input type="number" inputmode="numeric" data-alcohol="${idx}" value="${i.alcoholMl}" style="width:70px"> mL` : ''}
         </div>
       </div>`).join('')}
@@ -348,6 +427,8 @@ function confirmItems(items, source) {
           ...i,
           kcal: Number(dialog.querySelector(`[data-kcal="${idx}"]`).value) || 0,
           protein: Number(dialog.querySelector(`[data-protein="${idx}"]`).value) || 0,
+          fat: Number(dialog.querySelector(`[data-fat="${idx}"]`).value) || 0,
+          carb: Number(dialog.querySelector(`[data-carb="${idx}"]`).value) || 0,
           alcoholMl: alcoholInput ? Number(alcoholInput.value) || 0 : (Number(i.alcoholMl) || 0),
           checked: dialog.querySelector(`[data-pick="${idx}"]`).checked
         };

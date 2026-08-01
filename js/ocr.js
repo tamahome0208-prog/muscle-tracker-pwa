@@ -3,17 +3,17 @@
 const ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
 
 const MEAL_PROMPT = `この写真に写っている食べ物を推定してください。
-日本の一般的な食品の栄養値を使い、1品ごとに名前・カロリー(kcal)・タンパク質(g)を返してください。
+日本の一般的な食品の栄養値を使い、1品ごとに名前・カロリー(kcal)・タンパク質(g)・脂質(g)・炭水化物(g)を返してください。
 飲み物にアルコールが含まれる場合は alcoholMl にmL数を入れてください。
 JSONのみを返してください。説明文は不要です。
-形式: {"items":[{"name":"...","kcal":0,"protein":0,"alcoholMl":0}]}`;
+形式: {"items":[{"name":"...","kcal":0,"protein":0,"fat":0,"carb":0,"alcoholMl":0}]}`;
 
 const RECEIPT_PROMPT = `このレシートから飲食物の品目だけを抽出してください。
 日用品・雑貨・レジ袋などの食べ物でないものは除外してください。
-各品目について日本の一般的な栄養値でカロリー(kcal)とタンパク質(g)を推定してください。
+各品目について日本の一般的な栄養値でカロリー(kcal)・タンパク質(g)・脂質(g)・炭水化物(g)を推定してください。
 アルコール飲料は alcoholMl にmL数を入れてください。
 JSONのみを返してください。説明文は不要です。
-形式: {"items":[{"name":"...","kcal":0,"protein":0,"alcoholMl":0}]}`;
+形式: {"items":[{"name":"...","kcal":0,"protein":0,"fat":0,"carb":0,"alcoholMl":0}]}`;
 
 const INBODY_PROMPT = `このインボディ（体組成計）の結果紙から3つの数値だけを読み取ってください。
 体重(kg)、骨格筋量または筋肉量(kg)、体脂肪率(%)の3つです。
@@ -82,6 +82,8 @@ export function parseItems(text) {
     name: String(i.name ?? '不明'),
     kcal: Number(i.kcal) || 0,
     protein: Number(i.protein) || 0,
+    fat: Number(i.fat) || 0,
+    carb: Number(i.carb) || 0,
     alcoholMl: Number(i.alcoholMl) || 0
   }));
 }

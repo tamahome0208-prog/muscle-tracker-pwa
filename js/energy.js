@@ -398,3 +398,160 @@ export function estimateMaintenance(meals, body, todayStr, equationEstimateKcal 
     note: `直近${days}日の平均摂取${Math.round(meanIntake)}kcalと体重変化${deltaWeight >= 0 ? '+' : ''}${deltaWeight.toFixed(1)}kgから逆算した実測ベースの推定です。`
   };
 }
+
+// --- macroTargets: タンパク質・脂質・炭水化物(PFC)の目標値 ---
+//
+// このアプリはこれまでタンパク質を体重比の固定目標(100g)で扱ってきたが、それでは
+// 除脂肪量(FFM)の変化にも、増量・減量のどちらの局面にも追随しない。以下は
+// タンパク質を「体重」ではなく「FFM」基準に切り替え、脂質・炭水化物にも
+// 根拠を明示した式を与えるための拡張。
+//
+// 【タンパク質: FFM基準】
+// Refalo, Trexler & Helms (2025, Strength & Conditioning Journal) の系統的レビュー
+// (ベイズ・メタ回帰、29研究)は、タンパク質摂取量と効果の間に線形の用量反応関係がある
+// 確率97%超と報告し、その関係は「体重よりFFM基準で表したとき」「男性で」「4週間を
+// 超える介入で」「体脂肪率が低いほど」強く出るとしている。このアプリのユーザー
+// (男性・初心者・trainingは4週間超を想定・体脂肪率は高くない)はこの4条件に
+// おおむね該当するため、FFM基準を採用する根拠になる。
+// Morton et al. 2018 (BJSM, 49研究/1,863人のメタ解析)は体重比で見た効果の頭打ちを
+// 1.62 g/kg・体重(信頼区間の上端は約2.2 g/kg)としている。
+// ISSN 2017のポジションスタンドは通常時1.4〜2.0 g/kg・体重、低カロリー期には
+// 2.3〜3.1 g/kg・体重に引き上げるべきとしている。
+// Helms et al. 2014は減量期の除脂肪体重の低いトレーニーについて2.3〜3.1 g/kg・FFMを
+// 挙げている。
+// これらを踏まえ、既定値を 2.4×FFM(g)、エネルギー赤字期は 2.8×FFM(g) とし、
+// 実務上の安全域として [1.6×体重, 2.2×体重] にクランプする(Morton 2018の頭打ちと
+// ISSN 2017の通常域を両側の目安にした、このアプリ独自の実務的な折衷であり、
+// どちらの論文も「この2.4/2.8という係数そのもの」を明記しているわけではない
+// 点は正直に書いておく)。
+//
+// 【脂質: 下限としての最低ライン】
+// ACSM 2016のポジションスタンドは、脂質摂取をエネルギー摂取の20%を慢性的に
+// 下回らせるべきではないとしている(脂溶性ビタミン・必須脂肪酸を含む食品の
+// 多様性が落ちることが理由)。Ruiz-Castellano et al. 2021は体重比で0.5 g/kg・体重を
+// 最低ラインとして挙げている。日本人の食事摂取基準(2025年版)の目標量も脂質20〜30%Eで、
+// 同じレンジが日本人集団についても支持されている。
+// Whittaker & Wu 2021(J Steroid Biochem Mol Biol, メタ解析)は、低脂質食が男性の
+// テストステロンをわずかに下げる方向に働くこと、かつその影響は「脂質が非常に低く、
+// かつカロリーも制限されている」組み合わせで最大になることを報告している。これは
+// まさにこのユーザーが繰り返し提案してきた「カロリーを削りつつ脂質も削る」方向の
+// 組み合わせであるため、脂質は削ってよい変数ではなく下限を持つ変数として扱う。
+// fat_g = max(0.5×体重, 0.20×E / 9)
+//
+// 【炭水化物: 残りとトリップワイヤー】
+// ACSM 2016は運動量に応じて、軽い(低強度・スキル練習中心)日は3〜5 g/kg/日、
+// 中等度(1日約1時間程度)の日は5〜7 g/kg/日を挙げている。このユーザーの運動量
+// (週3回のマシントレーニング+週2時間のバドミントン、概ね週5時間)は軽度〜中等度の
+// 境界にあたるため、3〜5 g/kg/日のレンジのうち下限側の 3 g/kg/日 を
+// 「これを下回ったら炭水化物が足りていない」というトリップワイヤーに採用する。
+// carb_g = (E − 4×protein_g − 9×fat_g) / 4
+// この式が 3×体重(g) を下回った場合、まずタンパク質を1.6×体重まで緩め、
+// それでも足りなければ脂質を「0.5×体重」の下駄を外した20%Eの床まで緩める。
+// それでもなお3×体重を下回るなら、それは炭水化物の割り振り方の問題ではなく
+// 「設定されているエネルギー量そのものが低すぎる」ことを意味するため、数値を
+// 静かに帳尻合わせせず energyTooLow として呼び出し側に警告させる。
+//
+// 【タンパク質の摂取タイミングについて、あえて実装しないこと】
+// Trommelen et al. 2023 (Cell Reports Medicine)はレジスタンス運動後に100gと25gの
+// タンパク質を比較し、100gの方が筋原線維合成が高く、上限は見えなかったと報告している。
+// 「1回20〜25gまで・1日4食に分けて」という広く流布した枠組みは、この知見からは
+// 支持されない。Mamerow 2014・Areta 2013は均等な分配が急性の合成指標を高めることを
+// 示しているが、これは急性の指標であり、鍛練者において「1日2食 vs 4食」を同じ
+// 総タンパク質量で比較した長期RCTは存在しない(これは埋まっていない研究の空白であり、
+// 「1日2食のこのユーザーの食べ方が問題だ」という結論の根拠にはできない)。そのため
+// このアプリは1食あたりのタンパク質上限を設けない。
+export const MACRO_PROTEIN_PER_FFM_DEFAULT = 2.4;
+export const MACRO_PROTEIN_PER_FFM_DEFICIT = 2.8;
+const MACRO_PROTEIN_CLAMP_LOW_PER_BW = 1.6;
+const MACRO_PROTEIN_CLAMP_HIGH_PER_BW = 2.2;
+const MACRO_FAT_MIN_PER_BW = 0.5;
+const MACRO_FAT_MIN_PCT_ENERGY = 0.20;
+const MACRO_CARB_MIN_PER_BW = 3; // g/kg/日。ACSM 2016の「軽度」運動量レンジ(3〜5g/kg)の下端
+
+/**
+ * PFC(タンパク質・脂質・炭水化物)の目標を計算する。数値は丸めずに返すので、
+ * 表示側(js/settingsTab.js, js/mealTab.js)でMath.round等をかけること。
+ *
+ * energyKcal: その日のエネルギー目標(呼び出し側が決める。例: targets.kcalMin)。
+ * ffmKg: 除脂肪量(estimateFfmKg で得る)。
+ * weightKg: 体重(currentBodyweight 等で得る、InBody未計測ならprofile.weight)。
+ * inDeficit: エネルギー赤字期かどうか(呼び出し側が推定維持カロリーと比較して渡す)。
+ *
+ * 3つの入力(energyKcal, ffmKg, weightKg)のいずれかが正の有限数でなければ、
+ * 計算不能として null を返す(他の関数と同じく「0として計算を続ける」ことはしない。
+ * 分母がFFM/体重であるこの計算で0や負値を通すと、割り算が発散したり、
+ * 誤って安全な数値に見える結果を返しかねないため)。
+ *
+ * 戻り値の status:
+ * - 'ok'       : 既定(またはクランプ後)のタンパク質・脂質のままで炭水化物が
+ *                3×体重(g)以上確保できた。
+ * - 'relaxed'  : 3×体重を下回ったため、タンパク質→脂質の順に下限まで緩めた結果、
+ *                炭水化物が3×体重以上に戻った。notes に緩めた理由を記録する。
+ * - 'energyTooLow' : タンパク質・脂質を下限まで緩めても炭水化物が3×体重に届かない。
+ *                これは炭水化物の配分の問題ではなく、energyKcal自体が低すぎることを
+ *                意味する。呼び出し側は静かに数値を出し直さず、その旨を明示すること。
+ */
+export function macroTargets({ energyKcal, ffmKg, weightKg, inDeficit = false } = {}) {
+  const energy = Number(energyKcal);
+  const ffm = Number(ffmKg);
+  const bw = Number(weightKg);
+  if (![energy, ffm, bw].every((n) => Number.isFinite(n) && n > 0)) return null;
+
+  const notes = [];
+  const lowRail = MACRO_PROTEIN_CLAMP_LOW_PER_BW * bw;
+  const highRail = MACRO_PROTEIN_CLAMP_HIGH_PER_BW * bw;
+  const perFfm = inDeficit ? MACRO_PROTEIN_PER_FFM_DEFICIT : MACRO_PROTEIN_PER_FFM_DEFAULT;
+
+  let proteinG = perFfm * ffm;
+  if (proteinG > highRail) {
+    notes.push(`タンパク質は${perFfm}×FFM(${proteinG.toFixed(1)}g)でしたが、上限の目安である体重×2.2(${highRail.toFixed(1)}g)に抑えました。`);
+    proteinG = highRail;
+  } else if (proteinG < lowRail) {
+    notes.push(`タンパク質は${perFfm}×FFM(${proteinG.toFixed(1)}g)でしたが、下限の目安である体重×1.6(${lowRail.toFixed(1)}g)まで引き上げました。`);
+    proteinG = lowRail;
+  }
+
+  const fatFloorByBw = MACRO_FAT_MIN_PER_BW * bw;
+  const fatFloorByPct = (MACRO_FAT_MIN_PCT_ENERGY * energy) / 9;
+  let fatG = Math.max(fatFloorByBw, fatFloorByPct);
+
+  const carbFor = (p, f) => (energy - 4 * p - 9 * f) / 4;
+  const carbMinG = MACRO_CARB_MIN_PER_BW * bw;
+
+  let carbG = carbFor(proteinG, fatG);
+  let status = 'ok';
+
+  if (carbG < carbMinG) {
+    if (proteinG > lowRail) {
+      proteinG = lowRail;
+      carbG = carbFor(proteinG, fatG);
+      notes.push(`炭水化物が目安の体重×3g(${carbMinG.toFixed(0)}g)を下回ったため、タンパク質を体重×1.6(${lowRail.toFixed(1)}g)まで緩めました。`);
+    }
+
+    if (carbG < carbMinG && fatG > fatFloorByPct) {
+      fatG = fatFloorByPct;
+      carbG = carbFor(proteinG, fatG);
+      notes.push(`それでも炭水化物が目安を下回ったため、脂質を20%Eの下限(${fatG.toFixed(1)}g)まで緩めました。`);
+    }
+
+    if (carbG < carbMinG) {
+      status = 'energyTooLow';
+      notes.push(
+        `タンパク質(${proteinG.toFixed(1)}g)・脂質(${fatG.toFixed(1)}g)を下限まで緩めても炭水化物は` +
+        `${carbG.toFixed(1)}g(体重1kgあたり${(carbG / bw).toFixed(1)}g)にしかならず、目安の体重×3g` +
+        `(${carbMinG.toFixed(0)}g)に届きません。${Math.round(energy)}kcalという設定自体が低すぎます。`
+      );
+    } else {
+      status = 'relaxed';
+    }
+  }
+
+  return {
+    proteinG,
+    fatG,
+    carbG,
+    carbPerKg: carbG / bw,
+    status,
+    notes
+  };
+}

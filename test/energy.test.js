@@ -9,7 +9,8 @@ import {
   eaFloorKcal,
   eaOptimalKcal,
   equationMaintenanceEstimate,
-  estimateMaintenance
+  estimateMaintenance,
+  macroTargets
 } from '../js/energy.js';
 
 // --- RMR式: 研究記載の実測値との照合 ---
@@ -289,4 +290,123 @@ test('estimateMaintenance: 壊れた/null要素の記録は読み飛ばして判
   const body = [null, { date: 'bad-date', weight: 999 }, { date: daysAgo(13), weight: 60, fatPct: 20 }, { date: daysAgo(0), weight: 60, fatPct: 20 }];
   const result = estimateMaintenance(meals, body, TODAY, 2300);
   assert.equal(result.method, 'trend');
+});
+
+// --- macroTargets(PFC目標) ---
+// このユーザー属性: 体重60kg・FFM48kg(体脂肪率20%相当)。
+
+function approx(actual, expected, tol = 0.05) {
+  assert.ok(Math.abs(actual - expected) < tol, `期待値 ${expected} に近いはず(実際: ${actual})`);
+}
+
+test('macroTargets: 入力が不正(非数値・0以下)ならnull', () => {
+  assert.equal(macroTargets({ energyKcal: 0, ffmKg: 48, weightKg: 60 }), null);
+  assert.equal(macroTargets({ energyKcal: 2000, ffmKg: 0, weightKg: 60 }), null);
+  assert.equal(macroTargets({ energyKcal: 2000, ffmKg: 48, weightKg: 'oops' }), null);
+  assert.equal(macroTargets({}), null);
+});
+
+test('macroTargets: 2300kcal(既定・非赤字)は2.4×FFMのタンパク質のままstatus ok', () => {
+  const r = macroTargets({ energyKcal: 2300, ffmKg: 48, weightKg: 60, inDeficit: false });
+  approx(r.proteinG, 2.4 * 48); // 115.2g、クランプ[96,132]の範囲内なのでクランプなし
+  approx(r.fatG, 0.20 * 2300 / 9); // 20%Eの床が0.5×体重(30g)より高いのでこちらを採用
+  approx(r.carbG, (2300 - 4 * r.proteinG - 9 * r.fatG) / 4);
+  assert.ok(r.carbPerKg >= 3, '3g/kg以上を満たしているのでstatusはok');
+  assert.equal(r.status, 'ok');
+  assert.deepEqual(r.notes, []);
+});
+
+test('macroTargets: 2000kcal(既定・非赤字)', () => {
+  const r = macroTargets({ energyKcal: 2000, ffmKg: 48, weightKg: 60, inDeficit: false });
+  approx(r.proteinG, 115.2);
+  approx(r.fatG, 2000 * 0.2 / 9);
+  approx(r.carbG, (2000 - 4 * 115.2 - 9 * (2000 * 0.2 / 9)) / 4);
+  assert.equal(r.status, 'ok');
+});
+
+test('macroTargets: 1750kcal(既定・非赤字)は炭水化物が体重1kgあたり約3.9g', () => {
+  const r = macroTargets({ energyKcal: 1750, ffmKg: 48, weightKg: 60, inDeficit: false });
+  approx(r.carbPerKg, 3.9, 0.1);
+  assert.equal(r.status, 'ok');
+});
+
+test('macroTargets: 1624kcal(EAフロア相当)は非赤字でもぎりぎりstatus ok(トリップワイヤーに近い)', () => {
+  const r = macroTargets({ energyKcal: 1624, ffmKg: 48, weightKg: 60, inDeficit: false });
+  assert.equal(r.status, 'ok');
+  assert.ok(r.carbPerKg >= 3 && r.carbPerKg < 4, `境界付近のはず(実際: ${r.carbPerKg})`);
+});
+
+test('macroTargets: 1200kcal(赤字)はタンパク質・脂質を下限まで緩めても炭水化物が3g/kgに届かずenergyTooLowに自己停止する', () => {
+  const r = macroTargets({ energyKcal: 1200, ffmKg: 48, weightKg: 60, inDeficit: true });
+  assert.equal(r.status, 'energyTooLow');
+  assert.ok(r.carbPerKg < 3, 'トリップワイヤーの3g/kgを下回っているはず');
+  assert.ok(r.notes.length > 0, '説明のnoteがあるはず');
+  assert.ok(r.notes.some((n) => /低すぎ/.test(n)), 'エネルギーが低すぎる旨のnoteがあるはず');
+  // 静かに帳尻合わせをしない: 返ってくる数値そのものが3g/kg未満であること
+  // (つまり呼び出し側が別の数値にすり替えて安全に見せていない)
+  approx(r.proteinG, 96); // 1.6×60まで緩めた値
+  approx(r.fatG, 1200 * 0.2 / 9); // 20%Eの床まで緩めた値
+});
+
+test('macroTargets: 赤字なしでも1200kcalは同様にenergyTooLowになる', () => {
+  const r = macroTargets({ energyKcal: 1200, ffmKg: 48, weightKg: 60, inDeficit: false });
+  assert.equal(r.status, 'energyTooLow');
+});
+
+test('macroTargets: エネルギー赤字期は2.8×FFMを使う(クランプに掛からない範囲で)', () => {
+  const r = macroTargets({ energyKcal: 2500, ffmKg: 45, weightKg: 60, inDeficit: true });
+  approx(r.proteinG, 2.8 * 45); // 126g。クランプ[96,132]の範囲内
+});
+
+test('macroTargets: タンパク質の上限クランプ(体重×2.2)が発動する', () => {
+  // 赤字期・BW50kg・FFM45kg(体脂肪率10%相当の痩身): 2.8×45=126g > 2.2×50=110g
+  const r = macroTargets({ energyKcal: 2200, ffmKg: 45, weightKg: 50, inDeficit: true });
+  approx(r.proteinG, 110);
+  assert.ok(r.notes.some((n) => /上限/.test(n)));
+});
+
+test('macroTargets: タンパク質の下限クランプ(体重×1.6)が発動する', () => {
+  // 非赤字・BW80kg・FFM48kg(体脂肪率40%相当): 2.4×48=115.2g < 1.6×80=128g
+  const r = macroTargets({ energyKcal: 2600, ffmKg: 48, weightKg: 80, inDeficit: false });
+  approx(r.proteinG, 128);
+  assert.ok(r.notes.some((n) => /下限/.test(n)));
+});
+
+test('macroTargets: 3g/kgを下回った状態からタンパク質だけの緩和で回復するとstatus relaxed', () => {
+  // 赤字・1500kcal: 初期は2.8×48=134.4→クランプで132g、脂質は20%Eの床(33.3g)。
+  // 炭水化物168g(2.8g/kg)は3g/kg(180g)未満なのでタンパク質を1.6×60=96gまで緩める。
+  // 緩めた後の炭水化物204g(3.4g/kg)は3g/kg以上に回復するので脂質は緩めずに済む。
+  const r = macroTargets({ energyKcal: 1500, ffmKg: 48, weightKg: 60, inDeficit: true });
+  assert.equal(r.status, 'relaxed');
+  approx(r.proteinG, 96);
+  approx(r.fatG, 1500 * 0.2 / 9); // 脂質は緩めていない(20%Eの床のまま)
+  assert.ok(r.carbPerKg >= 3);
+  assert.ok(r.notes.some((n) => /タンパク質/.test(n) && /緩め/.test(n)));
+  assert.ok(!r.notes.some((n) => /脂質.*緩め/.test(n)), '脂質はこのケースでは緩める必要が無いはず');
+});
+
+test('macroTargets: 脂質の0.5×体重の床が20%Eの床より高い場合、最初はそちらが採用される(通常時)', () => {
+  // 十分なエネルギーがあり緩和が要らない代表例: 1350kcal・FFM10kg・BW60kgなら
+  // タンパク質の必要量(1.6×60=96g、下限クランプ)が小さく抑えられるほどFFMが低い場合を除き
+  // 一般には0.5×体重(30g)より20%Eの床の方が先に大きくなる。ここでは低カロリー・低FFMという
+  // 極端な組み合わせで0.5×体重の床(30g)がそのまま採用されるケースのみを確認する
+  // (3g/kgトリップワイヤーとの整合は次のテストで別途確認する)。
+  const r = macroTargets({ energyKcal: 1350, ffmKg: 5, weightKg: 60, inDeficit: false });
+  approx(r.fatG, 30);
+});
+
+// 【この式が持つ性質、意図的に書き残す】0.5×体重という脂質の床と、3×体重という炭水化物の
+// トリップワイヤーは、定数どうしの関係上ほぼ両立しない: 脂質が0.5×体重の床で決まる
+// (=E/体重が22.5kcal/kg未満)状況では、タンパク質を1.6×体重まで緩めた最良のケースでも
+// 必要エネルギー密度は約22.9kcal/kg(4×1.6+9×0.5+12)であり、22.5よりわずかに高い。
+// つまり脂質が0.5×体重の床で始まったケースは、この式の中でほぼ必ず脂質も
+// 20%Eの床まで緩和されることになる(=0.5×体重の床のまま最終確定することは構造的に稀)。
+// これは実装のバグではなく、この3つの定数(1.6・0.5・3)の組み合わせ自体が持つ性質であり、
+// 「エネルギーが本当に厳しい局面では、脂質の上乗せ分より炭水化物のトリップワイヤーを
+// 優先する」という設計意図とも整合している。
+test('macroTargets: エネルギー密度が低い場合、脂質は0.5×体重の床から20%Eの床まで緩和される', () => {
+  const r = macroTargets({ energyKcal: 1300, ffmKg: 48, weightKg: 60, inDeficit: false });
+  approx(r.fatG, 1300 * 0.2 / 9);
+  assert.ok(r.fatG < 30, '緩和前の0.5×体重(30g)より低い値まで下がっているはず');
+  assert.equal(r.status, 'energyTooLow');
 });

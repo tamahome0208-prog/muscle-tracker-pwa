@@ -2,18 +2,26 @@
 
 const ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
 
+// fibre(食物繊維g)・vitaminD(ビタミンDµg)・calcium(カルシウムmg)・salt(食塩相当量g)は
+// このアプリが二次的に(死守2項目ではなく参考値として)追跡する4項目
+// (js/micronutrients.js 参照)。確認画面で必ず数値を見せて修正できるようにするが、
+// 手入力(js/mealTab.js の openItemForm)には追加しない — OCRなら写真から自動推定できるが、
+// 手入力にまで4項目を追加すると「立ったまま入力する」前提のこのアプリで
+// 入力の手間だけが増え、誰も埋めないフィールドが増えるだけになる。
 const MEAL_PROMPT = `この写真に写っている食べ物を推定してください。
-日本の一般的な食品の栄養値を使い、1品ごとに名前・カロリー(kcal)・タンパク質(g)・脂質(g)・炭水化物(g)を返してください。
+日本の一般的な食品の栄養値を使い、1品ごとに名前・カロリー(kcal)・タンパク質(g)・脂質(g)・炭水化物(g)・
+食物繊維(g)・ビタミンD(µg)・カルシウム(mg)・食塩相当量(g)を返してください。
 飲み物にアルコールが含まれる場合は alcoholMl にmL数を入れてください。
 JSONのみを返してください。説明文は不要です。
-形式: {"items":[{"name":"...","kcal":0,"protein":0,"fat":0,"carb":0,"alcoholMl":0}]}`;
+形式: {"items":[{"name":"...","kcal":0,"protein":0,"fat":0,"carb":0,"fibre":0,"vitaminD":0,"calcium":0,"salt":0,"alcoholMl":0}]}`;
 
 const RECEIPT_PROMPT = `このレシートから飲食物の品目だけを抽出してください。
 日用品・雑貨・レジ袋などの食べ物でないものは除外してください。
-各品目について日本の一般的な栄養値でカロリー(kcal)・タンパク質(g)・脂質(g)・炭水化物(g)を推定してください。
+各品目について日本の一般的な栄養値でカロリー(kcal)・タンパク質(g)・脂質(g)・炭水化物(g)・
+食物繊維(g)・ビタミンD(µg)・カルシウム(mg)・食塩相当量(g)を推定してください。
 アルコール飲料は alcoholMl にmL数を入れてください。
 JSONのみを返してください。説明文は不要です。
-形式: {"items":[{"name":"...","kcal":0,"protein":0,"fat":0,"carb":0,"alcoholMl":0}]}`;
+形式: {"items":[{"name":"...","kcal":0,"protein":0,"fat":0,"carb":0,"fibre":0,"vitaminD":0,"calcium":0,"salt":0,"alcoholMl":0}]}`;
 
 const INBODY_PROMPT = `このインボディ（体組成計）の結果紙から3つの数値だけを読み取ってください。
 体重(kg)、骨格筋量または筋肉量(kg)、体脂肪率(%)の3つです。
@@ -84,6 +92,10 @@ export function parseItems(text) {
     protein: Number(i.protein) || 0,
     fat: Number(i.fat) || 0,
     carb: Number(i.carb) || 0,
+    fibre: Number(i.fibre) || 0,
+    vitaminD: Number(i.vitaminD) || 0,
+    calcium: Number(i.calcium) || 0,
+    salt: Number(i.salt) || 0,
     alcoholMl: Number(i.alcoholMl) || 0
   }));
 }

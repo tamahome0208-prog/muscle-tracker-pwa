@@ -125,3 +125,32 @@ test('targetsの分母が0または非有限なら達成率は0%として扱う�
   const a2 = achievement({ kcal: 1750, protein: 100, alcoholMl: 0 }, { ...TARGETS, kcalMin: 0 });
   assert.equal(a2.kcalPct, 0);
 });
+
+// --- achievement() のEA(エネルギー可用性)フロア連動(js/energy.js の eaFloorKcal) ---
+
+test('achievement: FFM既知ならEAフロアを下限の基準に使う(固定targets.kcalFloorより厳しくなりうる)', () => {
+  // FFM48kg・運動消費184kcal/日 → EAフロア = 30*48+184 = 1,624kcal
+  // 1,600kcalはTARGETSの固定kcalFloor(1,500)より高いので従来なら警告は出ないが、
+  // EAフロア(1,624)を下回るため danger 警告に切り替わる。
+  const a = achievement({ kcal: 1600, protein: 100, alcoholMl: 0 }, TARGETS, { dayOver: true, ffmKg: 48, exerciseKcal: 184 });
+  const w = a.warnings.find((x) => x.type === 'kcalFloor');
+  assert.ok(w, 'EAフロアを下回っているのでkcalFloor警告が出るはず');
+  assert.equal(w.level, 'danger');
+  assert.match(w.message, /エネルギー可用性/);
+  assert.match(w.message, /1624/);
+});
+
+test('achievement: 同じ1,600kcalでもffmKgを渡さなければ固定targets.kcalFloor(1,500)基準のまま警告なし', () => {
+  const a = achievement({ kcal: 1600, protein: 100, alcoholMl: 0 }, TARGETS, { dayOver: true });
+  assert.ok(!a.warnings.some((w) => w.type === 'kcalFloor'));
+});
+
+test('achievement: ffmKgが不正(0以下・非数値)なら固定targets.kcalFloorにフォールバックする', () => {
+  const a = achievement({ kcal: 1600, protein: 100, alcoholMl: 0 }, TARGETS, { dayOver: true, ffmKg: 0, exerciseKcal: 184 });
+  assert.ok(!a.warnings.some((w) => w.type === 'kcalFloor'));
+});
+
+test('achievement: EAフロアを上回っていればFFM既知でも警告は出ない', () => {
+  const a = achievement({ kcal: 1700, protein: 100, alcoholMl: 0 }, TARGETS, { dayOver: true, ffmKg: 48, exerciseKcal: 184 });
+  assert.ok(!a.warnings.some((w) => w.type === 'kcalFloor'));
+});

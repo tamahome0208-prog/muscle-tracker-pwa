@@ -2,6 +2,8 @@ import { $, onShow, toast, todayStr, nowStr, newId, esc, icon } from './ui.js';
 import { dayTotals, achievement, sortFoodsByUse, bumpFoodUse } from './nutrition.js';
 import { isBarcodeSupported, scanJan, lookupJan } from './barcode.js';
 import { analyzeMealPhoto, analyzeReceipt, OcrError } from './ocr.js';
+import { estimateFfmKg, dailyExerciseKcal } from './energy.js';
+import { latestBody, currentBodyweight } from './body.js';
 
 let store;
 
@@ -13,12 +15,24 @@ export function initMealTab(s) {
 
 /** 上部の死守2項目バーを更新する。食事を追加するたびに呼ぶ */
 export function renderStatusBar() {
-  const targets = store.get('profile').targets;
+  const profile = store.get('profile');
+  const targets = profile.targets;
   const totals = dayTotals(store.get('meals'), todayStr());
   // このステータスバーは常に「今日」の集計しか表示しない(過去日を見るビューは
   // 無い)ため、dayOver は現在時刻が20時以降かどうかだけで決まる。
   const dayOver = new Date().getHours() >= 20;
-  const a = achievement(totals, targets, { dayOver });
+
+  // EA(エネルギー可用性)フロアで下限警告を判定するため、直近のInBody記録から
+  // FFM(除脂肪量)と直近7日の運動消費kcalを渡す(js/energy.js 参照)。
+  // InBody記録が無ければ ffmKg は null になり、achievement() は従来どおり
+  // targets.kcalFloor の固定値にフォールバックする。
+  const body = store.get('body');
+  const latest = latestBody(body);
+  const ffmKg = latest ? estimateFfmKg(latest) : null;
+  const weightForExercise = currentBodyweight(body, profile);
+  const exerciseKcal = dailyExerciseKcal(store.get('workouts'), store.get('badminton'), todayStr(), weightForExercise);
+
+  const a = achievement(totals, targets, { dayOver, ffmKg, exerciseKcal });
 
   const setBar = (fillId, valueId, pct, text, state) => {
     const fill = $(fillId);

@@ -1,3 +1,5 @@
+import { eaFloorKcal } from './energy.js';
+
 /** 数値化できない値は0として扱い、NaN/文字列連結の伝播を防ぐ */
 function toNum(v) {
   const n = Number(v);
@@ -49,13 +51,23 @@ export function dayTotals(meals, dateStr) {
  * targets の分母(protein / kcalMin)が0または非有限の場合、割り算が
  * Infinity/NaN になり JSON.stringify で null に化ける(store.js で潰したのと
  * 同じ失敗モード)。ここではバーが伸びないだけで済むよう達成率を0%として扱う。
+ *
+ * ffmKg(除脂肪量, kg)を渡すと、下限警告の基準を targets.kcalFloor の固定値ではなく
+ * js/energy.js の eaFloorKcal(EA=エネルギー可用性フロア: 30 × FFM + 運動消費kcal、
+ * ACSM/AND/DC 2016)に切り替える。ffmKg が無い/不正(InBody記録が無い端末)なら、
+ * これまでどおり targets.kcalFloor を使う(後方互換: ffmKgを渡さない既存の呼び出しは
+ * 挙動を変えない)。exerciseKcal は直近の運動消費(js/energy.js の dailyExerciseKcal)で、
+ * 未指定なら0として扱う。
  */
-export function achievement(totals, targets, { dayOver = false } = {}) {
+export function achievement(totals, targets, { dayOver = false, ffmKg = null, exerciseKcal = 0 } = {}) {
   const kcal = toNum(totals?.kcal);
   const protein = toNum(totals?.protein);
   const alcoholMl = toNum(totals?.alcoholMl);
 
   const warnings = [];
+
+  const eaFloor = eaFloorKcal(ffmKg, exerciseKcal);
+  const floor = Number.isFinite(eaFloor) && eaFloor > 0 ? eaFloor : targets.kcalFloor;
 
   if (kcal > targets.kcalMax) {
     warnings.push({
@@ -64,11 +76,16 @@ export function achievement(totals, targets, { dayOver = false } = {}) {
       message: `目標を${Math.round(kcal - targets.kcalMax)}kcal超えています`
     });
   } else if (dayOver) {
-    if (kcal > 0 && kcal < targets.kcalFloor) {
+    if (kcal > 0 && kcal < floor) {
       warnings.push({
         type: 'kcalFloor',
         level: 'danger',
-        message: `${Math.round(kcal)}kcal は少なすぎます。この水準が続くと筋肉が分解されて目的と逆方向に進みます`
+        // EAベースの目安が使えるときは、その根拠となる数字も併記する(単なる「少なすぎます」
+        // という言い切りより、どこから来た基準かを見せる方が誠実)。EA30は崖ではなく
+        // 警告ラインなので、ここでも「下回ると即座に何かが壊れる」とは言わない。
+        message: Number.isFinite(eaFloor) && eaFloor > 0
+          ? `${Math.round(kcal)}kcal は少なすぎます(エネルギー可用性の目安 約${Math.round(floor)}kcal を下回っています)。この水準が続くと筋肉が分解されて目的と逆方向に進みます`
+          : `${Math.round(kcal)}kcal は少なすぎます。この水準が続くと筋肉が分解されて目的と逆方向に進みます`
       });
     }
   } else {

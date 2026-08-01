@@ -4,6 +4,7 @@ import { isBarcodeSupported, scanJan, lookupJan } from './barcode.js';
 import { analyzeMealPhoto, analyzeReceipt, OcrError } from './ocr.js';
 import { estimateFfmKg, dailyExerciseKcal, macroTargets, estimateMaintenance, equationMaintenanceEstimate } from './energy.js';
 import { latestBody, currentBodyweight } from './body.js';
+import { microTargetsForAge, applyAldh2Answer } from './micronutrients.js';
 
 let store;
 
@@ -56,12 +57,17 @@ export function renderStatusBar() {
     totals.kcal > targets.kcalMax ? 'over' : (totals.kcal >= targets.kcalMin ? 'done' : ''));
   // targets.alcoholMl が0(禁酒目標)だと 0/0 が NaN になり、幅が Infinity%/NaN% に
   // 化ける。目標0のときは「1mlでも飲んだら100%」として扱う。
+  // バーの幅・over/done判定は既存どおり targets.alcoholMl(ml)基準のまま変えない
+  // (設定タブの目標入力・achievement()のalcoholOver判定を変更せずに済ませるため)。
+  // 表示するテキストだけを、全ての飲酒ガイドラインが使う単位である純アルコール(g)に
+  // 変換する(js/micronutrients.js の alcoholGrams、dayTotals が totals.alcoholG として
+  // 計算済み)。20g(500ml・5%)を「危険」と煽らないよう、ここでは数値だけを淡々と示す。
   const alcoholPct = targets.alcoholMl > 0
     ? (totals.alcoholMl / targets.alcoholMl) * 100
     : (totals.alcoholMl > 0 ? 100 : 0);
   setBar('#alcoholFill', '#alcoholValue',
     alcoholPct,
-    `${totals.alcoholMl} / ${targets.alcoholMl}ml`,
+    `${Math.round(totals.alcoholG)}g（${totals.alcoholMl}ml）`,
     a.alcoholOver ? 'over' : '');
 
   const warningsHtml = a.warnings.map((w) => `<div class="warn ${w.level}">${w.message}</div>`);
@@ -134,6 +140,112 @@ function renderMacroSecondary(totals, macro) {
     <span>炭水化物 ${carbText}${carbTarget !== null ? ` / ${carbTarget}g` : ''}</span>`;
 }
 
+// --- 参考栄養素(食物繊維・ビタミンD・カルシウム・食塩相当量・純アルコール) ---
+//
+// js/micronutrients.js 参照: この5項目はタンパク質・カロリー(死守2項目)は
+// もちろん、脂質・炭水化物(二次表示)よりもさらに軽い「三次」表示にする。
+// ステータスバー(#statusBar)にこれ以上バーや行を積み増すと、筋トレの合間に
+// 一瞬だけ見る画面という設計そのものが壊れる。そのため、食事を記録・確認しに
+// 来ている食事タブ側にだけ、進捗バー無し・muted文字の小さなカードとして置く
+// (js/energy.jsのEAカードをrecordTabに置いたのと同様、"見たい人だけが見る"場所)。
+
+/** 未計測データは「0」ではなく不明であることを示す(renderMacroSecondaryと同じ約束) */
+function microValueText(known, value, unit, noRecordYet, label) {
+  if (known) return `${Math.round(value * 10) / 10}${unit}`;
+  if (noRecordYet) return '--';
+  return `${Math.round(value * 10) / 10}${unit}+ <span class="macro-unknown" title="${esc(label)}のデータが無い品目が含まれています(実測ではありません)">*</span>`;
+}
+
+// ALDH2(アルコール分解酵素)フラッシング質問への回答が「はい」のときに一度だけ出す注記。
+// 出典・数字はここに固定しておく(呼び出し側で文言をいじって誇張/矮小化しないため)。
+// 84.8%/82.3%はフラッシング質問のALDH2不活性型に対する感度/特異度、Yokoyama 2003・
+// Brooks 2009は少量〜中等量の飲酒でも食道扁平上皮癌リスクが上がるとする報告。
+// 「診断ではない」「あくまで目安」「判断は本人に委ねる」の3点を必ず含め、危険を
+// 煽る言い回し(「危険です」「やめるべきです」等)は使わない。
+export const ALDH2_YES_NOTICE =
+  '「顔が赤くなる」体質は、アルコールを分解する酵素ALDH2の働きが弱いことと関連があるとされています。' +
+  'この体質では、少量〜中等量の飲酒でも食道がんのリスクが高まるという報告があります' +
+  '(Yokoyama et al. 2003; Brooks et al. 2009)。このアンケートはALDH2の状態を確定する検査ではなく、' +
+  'あくまで目安(感度84.8%・特異度82.3%程度)です。診断ではありません。' +
+  '今後の飲酒量をどうするかは、あなた自身の判断です。';
+
+function renderMicroCard(totals, profile) {
+  const el = $('#microSecondary');
+  const alcoholEl = $('#alcoholNote');
+  const aldh2El = $('#aldh2Area');
+  if (!el || !alcoholEl || !aldh2El) return;
+
+  const targets = microTargetsForAge(profile.age);
+  const noRecordYet = totals.kcal === 0;
+
+  el.innerHTML = `
+    <span>食物繊維 ${microValueText(totals.fibreKnown, totals.fibre, 'g', noRecordYet, '食物繊維')} / ${targets.fibreG}g</span>
+    <span>ビタミンD ${microValueText(totals.vitaminDKnown, totals.vitaminD, 'µg', noRecordYet, 'ビタミンD')} / ${targets.vitaminDUg}µg</span>
+    <span>カルシウム ${microValueText(totals.calciumKnown, totals.calcium, 'mg', noRecordYet, 'カルシウム')} / ${targets.calciumMg}mg</span>
+    <span>食塩相当量 ${microValueText(totals.saltKnown, totals.salt, 'g', noRecordYet, '食塩相当量')} （目標 ${targets.saltG}g未満）</span>`;
+
+  // 純アルコールの文脈: 「危険」ではなく「1日の予算の中で一番手軽に取り戻せる分」として
+  // 見せる(ブリーフの指示通り、20gをdangerとして煽らない)。alcoholKcalは実際に記録された
+  // アルコール品目のkcal(js/nutrition.js の dayTotals)から計算し、220kcalのような
+  // 決め打ちの数字は使わない。
+  if (totals.alcoholMl > 0) {
+    const pctOfBudget = profile.targets.kcalMin > 0
+      ? Math.round((totals.alcoholKcal / profile.targets.kcalMin) * 100)
+      : null;
+    alcoholEl.innerHTML = `純アルコール ${Math.round(totals.alcoholG)}g（${totals.alcoholMl}ml・約${Math.round(totals.alcoholKcal)}kcal）` +
+      (pctOfBudget !== null ? ` — 1日の目安(${profile.targets.kcalMin}kcal)の約${pctOfBudget}%。ここが一番手軽に取り戻せるカロリーです` : '');
+  } else {
+    alcoholEl.innerHTML = noRecordYet ? '' : '純アルコール 0g';
+  }
+
+  aldh2El.innerHTML = renderAldh2Area(profile);
+}
+
+/** ALDH2フラッシング質問(未回答なら1回だけ)、または「はい」回答時の注記(未クローズなら) */
+function renderAldh2Area(profile) {
+  if (profile.aldh2Flushing == null) {
+    return `
+      <div class="ex" id="aldh2Question">
+        <div class="muted">お酒を飲むと顔が赤くなりますか？（一度だけお聞きします。あとで設定タブから回答を変更できます）</div>
+        <div class="chips" style="margin-top:6px">
+          <button data-aldh2-answer="yes">はい</button>
+          <button data-aldh2-answer="no">いいえ</button>
+          <button data-aldh2-answer="skipped">あとで</button>
+        </div>
+      </div>`;
+  }
+  if (profile.aldh2Flushing === 'yes' && !profile.aldh2NoticeDismissed) {
+    return `
+      <div class="warn info" id="aldh2Notice">
+        ${esc(ALDH2_YES_NOTICE)}
+        <div style="margin-top:6px"><button data-aldh2-dismiss>閉じる</button></div>
+      </div>`;
+  }
+  return '';
+}
+
+function answerAldh2Question(answer) {
+  const profile = store.get('profile');
+  try {
+    store.set('profile', applyAldh2Answer(profile, answer));
+  } catch {
+    toast('保存できませんでした（端末の空き容量を確認してください）');
+    return;
+  }
+  renderMealTab();
+}
+
+function dismissAldh2Notice() {
+  const profile = store.get('profile');
+  try {
+    store.set('profile', { ...profile, aldh2NoticeDismissed: true });
+  } catch {
+    toast('保存できませんでした（端末の空き容量を確認してください）');
+    return;
+  }
+  renderMealTab();
+}
+
 /** ワンタップで1品追加する。食品の使用回数も増やして並び順を育てる */
 export function addFoodById(foodId) {
   const food = store.get('foods').find((f) => f.id === foodId);
@@ -143,14 +255,19 @@ export function addFoodById(foodId) {
   // 遅れてしまい、「よく食べるものが1タップで届く位置に来る」という
   // このタブの存在意義そのものが体感で1回遅れて壊れる。
   store.set('foods', bumpFoodUse(store.get('foods'), foodId));
-  // food.fat/food.carb はシード食品(data/foods.json)やOCR経由で登録された食品には
-  // あるが、旧バージョンで登録済みのバーコード食品(js/main.js の foodsMacroSyncedV1
-  // 移行の対象外)には無いことがある。無い場合はプロパティごと省略し、undefinedを
-  // 明示的な0として保存しない(js/nutrition.js の dayTotals が「不明」として
-  // 扱えるようにするため)。
+  // food.fat/food.carb/food.fibre/food.vitaminD/food.calcium/food.salt はシード食品
+  // (data/foods.json)やOCR経由で登録された食品にはあるが、旧バージョンで登録済みの
+  // バーコード食品(js/main.js の foodsMacroSyncedV1/foodsMicroSyncedV1 移行の対象外)
+  // には無いことがある。無い場合はプロパティごと省略し、undefinedを明示的な0として
+  // 保存しない(js/nutrition.js の dayTotals が「不明」として扱えるようにするため)。
   const item = { name: food.name, kcal: food.kcal, protein: food.protein, alcoholMl: food.alcoholMl ?? 0 };
   if (food.fat !== undefined) item.fat = food.fat;
   if (food.carb !== undefined) item.carb = food.carb;
+  if (food.fibre !== undefined) item.fibre = food.fibre;
+  if (food.vitaminD !== undefined) item.vitaminD = food.vitaminD;
+  if (food.calcium !== undefined) item.calcium = food.calcium;
+  if (food.salt !== undefined) item.salt = food.salt;
+  if (food.alcoholAbvPct !== undefined) item.alcoholAbvPct = food.alcoholAbvPct;
   const saved = addItems([item], 'tap');
   // addItems が保存失敗のtoastを既に出している場合、ここで成功toastを重ねて
   // 上書きしてしまうと「保存できませんでした」が一瞬で消え、実際には保存されて
@@ -214,6 +331,12 @@ export function renderMealTab() {
           </div>
           ${m.items.map((i) => `<div class="muted">${esc(i.name)} — ${i.kcal}kcal / P${i.protein}g</div>`).join('')}
         </div>`).join('')}
+    </div>
+    <div class="card">
+      <h2 style="margin-top:0">参考栄養素</h2>
+      <div class="micro-secondary" id="microSecondary"></div>
+      <div class="muted" id="alcoholNote" style="margin-top:6px"></div>
+      <div id="aldh2Area"></div>
     </div>`;
 
   $('#foodChips').addEventListener('click', (e) => {
@@ -225,11 +348,23 @@ export function renderMealTab() {
   // 描画のたびにハンドラが積み重なる。onclick 代入で常に1つに保つ
   $('#tab-meal').onclick = (e) => {
     const del = e.target.closest('[data-del]');
-    if (!del) return;
-    store.set('meals', store.get('meals').filter((m) => m.id !== del.dataset.del));
-    renderStatusBar();
-    renderMealTab();
+    if (del) {
+      store.set('meals', store.get('meals').filter((m) => m.id !== del.dataset.del));
+      renderStatusBar();
+      renderMealTab();
+      return;
+    }
+    const aldh2Btn = e.target.closest('[data-aldh2-answer]');
+    if (aldh2Btn) {
+      answerAldh2Question(aldh2Btn.dataset.aldh2Answer);
+      return;
+    }
+    if (e.target.closest('[data-aldh2-dismiss]')) {
+      dismissAldh2Notice();
+    }
   };
+
+  renderMicroCard(dayTotals(store.get('meals'), today), store.get('profile'));
 
   $('#btnManual').addEventListener('click', openManualDialog);
 
@@ -411,6 +546,12 @@ function confirmItems(items, source) {
           <input type="number" inputmode="decimal" data-carb="${idx}" value="${i.carb ?? 0}" style="width:70px"> gC
           ${Number(i.alcoholMl) > 0 ? `<input type="number" inputmode="numeric" data-alcohol="${idx}" value="${i.alcoholMl}" style="width:70px"> mL` : ''}
         </div>
+        <div class="ex-ctrl muted" style="font-size:11px">
+          食物繊維<input type="number" inputmode="decimal" data-fibre="${idx}" value="${i.fibre ?? 0}" style="width:50px"> g
+          ビタミンD<input type="number" inputmode="decimal" data-vitamind="${idx}" value="${i.vitaminD ?? 0}" style="width:50px"> µg
+          カルシウム<input type="number" inputmode="decimal" data-calcium="${idx}" value="${i.calcium ?? 0}" style="width:55px"> mg
+          食塩<input type="number" inputmode="decimal" data-salt="${idx}" value="${i.salt ?? 0}" style="width:50px"> g
+        </div>
       </div>`).join('')}
     <div class="chips">
       <button id="btnOcrSave" class="primary">保存</button>
@@ -429,6 +570,10 @@ function confirmItems(items, source) {
           protein: Number(dialog.querySelector(`[data-protein="${idx}"]`).value) || 0,
           fat: Number(dialog.querySelector(`[data-fat="${idx}"]`).value) || 0,
           carb: Number(dialog.querySelector(`[data-carb="${idx}"]`).value) || 0,
+          fibre: Number(dialog.querySelector(`[data-fibre="${idx}"]`).value) || 0,
+          vitaminD: Number(dialog.querySelector(`[data-vitamind="${idx}"]`).value) || 0,
+          calcium: Number(dialog.querySelector(`[data-calcium="${idx}"]`).value) || 0,
+          salt: Number(dialog.querySelector(`[data-salt="${idx}"]`).value) || 0,
           alcoholMl: alcoholInput ? Number(alcoholInput.value) || 0 : (Number(i.alcoholMl) || 0),
           checked: dialog.querySelector(`[data-pick="${idx}"]`).checked
         };

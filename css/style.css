@@ -40,6 +40,13 @@ body.timer-active { padding-bottom: calc(150px + var(--safe-bottom)); }
 .macro-secondary:empty { display: none; }
 .macro-unknown { font-style: normal; color: var(--pb); font-weight: 700; }
 
+/* 食物繊維・ビタミンD・カルシウム・食塩相当量: 脂質/炭水化物(二次表示)よりさらに
+   軽い三次表示。ステータスバーではなく食事タブのカード内に置くため、幅の制約が
+   ステータスバーほど厳しくなく折り返しても崩れないよう flex-wrap を許可する。 */
+.micro-secondary { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12px; color: var(--muted);
+  font-variant-numeric: tabular-nums; }
+.micro-secondary:empty { display: none; }
+
 #warnings:empty { display: none; }
 .warn { font-size: 13px; padding: 6px 8px; border-radius: 6px; margin-top: 6px; }
 .warn.danger { background: #3a1218; color: #ffb3ba; border: 1px solid var(--danger); }

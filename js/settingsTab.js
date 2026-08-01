@@ -4,6 +4,7 @@ import {
   macroTargets, estimateMaintenance, equationMaintenanceEstimate
 } from './energy.js';
 import { latestBody, currentBodyweight } from './body.js';
+import { microTargetsForAge, applyAldh2Answer, alcoholGrams, ALCOHOL_RISK_G } from './micronutrients.js';
 
 let store;
 
@@ -23,17 +24,37 @@ export function renderSettingsTab() {
       <div class="ex-ctrl">身長 <input type="number" inputmode="decimal" id="tHeight" value="${profile.height}" style="width:80px">cm</div>
       <div class="ex-ctrl">体重 <input type="number" inputmode="decimal" id="tWeight" value="${profile.weight}" style="width:80px">kg</div>
       <p class="muted">この体重はInBody記録が無いときのフォールバックです。InBody記録があれば常にそちらの最新値を優先して総挙上量・XPを計算します。</p>
+      <div class="ex-ctrl">年齢 <input type="number" inputmode="numeric" id="tAge" value="${profile.age}" style="width:80px">歳</div>
+      <p class="muted">基礎代謝の計算式、および食物繊維・カルシウムの基準値(日本人の食事摂取基準2025年版は18-29歳/30-49歳で異なる値を定めている)の年代判定に使います。</p>
       <div class="ex-ctrl">タンパク質 <input type="number" inputmode="decimal" id="tProtein" value="${t.protein}" style="width:80px">g</div>
       <div class="ex-ctrl">カロリー下限 <input type="number" inputmode="numeric" id="tKcalMin" value="${t.kcalMin}" style="width:90px"></div>
       <div class="ex-ctrl">カロリー上限 <input type="number" inputmode="numeric" id="tKcalMax" value="${t.kcalMax}" style="width:90px"></div>
       <div class="ex-ctrl">警告ライン <input type="number" inputmode="numeric" id="tKcalFloor" value="${t.kcalFloor}" style="width:90px"></div>
-      <div class="ex-ctrl">発泡酒 <input type="number" inputmode="numeric" id="tAlcohol" value="${t.alcoholMl}" style="width:90px">ml</div>
+      <div class="ex-ctrl">アルコール量の目安 <input type="number" inputmode="numeric" id="tAlcohol" value="${t.alcoholMl}" style="width:90px">ml</div>
+      <p class="muted">純アルコール換算で約${Math.round(alcoholGrams(t.alcoholMl))}g/日相当です(度数5%換算。食事タブ・上のバーには常にこの純アルコール(g)換算で表示されます)。
+        参考: MHLW「飲酒ガイドライン」(2024)は男性で生活習慣病のリスクが高まる目安を1日${ALCOHOL_RISK_G}gとしています。危険という意味ではなく、比較のための目安です。</p>
       <p class="muted">警告ラインを下回った日は「食べなさすぎ」の警告が出ます。摂取を削るほど筋肉が落ちるため、下限側を守る設計です。</p>
       <button id="btnSaveTargets" class="primary">保存</button>
     </div>
 
     <div class="card">
       ${renderMacroCard()}
+    </div>
+
+    <div class="card">
+      ${renderMicroCard(profile)}
+    </div>
+
+    <div class="card">
+      <h2 style="margin-top:0">体質に関する質問</h2>
+      <p class="muted">お酒を飲むと顔が赤くなりますか？　食事タブで一度だけお聞きする質問ですが、ここからいつでも回答を変更できます。</p>
+      <select id="tAldh2">
+        <option value="" ${profile.aldh2Flushing == null ? 'selected' : ''}>未回答</option>
+        <option value="yes" ${profile.aldh2Flushing === 'yes' ? 'selected' : ''}>はい(顔が赤くなる)</option>
+        <option value="no" ${profile.aldh2Flushing === 'no' ? 'selected' : ''}>いいえ</option>
+        <option value="skipped" ${profile.aldh2Flushing === 'skipped' ? 'selected' : ''}>あとで(食事タブでは聞かない)</option>
+      </select>
+      <button id="btnSaveAldh2" class="primary" style="margin-left:8px">保存</button>
     </div>
 
     <div class="card">
@@ -60,6 +81,7 @@ export function renderSettingsTab() {
   $('#btnSaveTargets').addEventListener('click', () => {
     const height = Number($('#tHeight').value);
     const weight = Number($('#tWeight').value);
+    const age = Number($('#tAge').value);
     const protein = Number($('#tProtein').value);
     const kcalMin = Number($('#tKcalMin').value);
     const kcalMax = Number($('#tKcalMax').value);
@@ -70,13 +92,17 @@ export function renderSettingsTab() {
     // 項目を「警告なし」として扱う。このユーザーはカロリーを削りたい衝動を
     // 自覚しているため、空欄/0での保存は警告を恒久的に無効化する抜け道になる。
     for (const [label, v] of [
-      ['身長', height], ['体重', weight], ['タンパク質目標', protein],
+      ['身長', height], ['体重', weight], ['年齢', age], ['タンパク質目標', protein],
       ['カロリー下限', kcalMin], ['カロリー上限', kcalMax], ['警告ライン', kcalFloor]
     ]) {
       if (!Number.isFinite(v) || v <= 0) {
         toast(`${label}には0より大きい数値を入力してください`);
         return;
       }
+    }
+    if (age < 18 || age > 100) {
+      toast('年齢には18〜100の範囲で入力してください');
+      return;
     }
     if (!Number.isFinite(alcoholMl) || alcoholMl < 0) {
       toast('発泡酒の目標には0以上の数値を入力してください');
@@ -120,12 +146,24 @@ export function renderSettingsTab() {
     // なったため、ここでの保存失敗を黙って無視できない(他の保存パスと同様に
     // try/catchで失敗を検知し、ボタンが何も言わずに無反応になるのを防ぐ)。
     try {
-      store.set('profile', { ...profile, height, weight, targets: { protein, kcalMin, kcalMax, kcalFloor, alcoholMl } });
+      store.set('profile', { ...profile, height, weight, age, targets: { protein, kcalMin, kcalMax, kcalFloor, alcoholMl } });
     } catch {
       toast('保存できませんでした（端末の空き容量を確認してください）');
       return;
     }
     toast(floorWarning ?? '目標を保存しました', floorWarning ? 6000 : undefined);
+  });
+
+  $('#btnSaveAldh2').addEventListener('click', () => {
+    const value = $('#tAldh2').value;
+    const answer = value === '' ? null : value;
+    try {
+      store.set('profile', applyAldh2Answer(store.get('profile'), answer));
+    } catch {
+      toast('保存できませんでした（端末の空き容量を確認してください）');
+      return;
+    }
+    toast('回答を保存しました');
   });
 
   $('#btnSaveSettings').addEventListener('click', () => {
@@ -247,4 +285,22 @@ function renderMacroCard() {
     <p class="muted">出典の要点: タンパク質はRefalo/Trexler/Helms 2025・Morton 2018・ISSN 2017・Helms 2014に基づきFFM基準・赤字期は係数を引き上げ。
       脂質はACSM 2016・Ruiz-Castellano 2021・日本人の食事摂取基準2025年版の20〜30%Eの下限を採用。
       炭水化物はACSM 2016の運動量別レンジ(軽度3〜5g/kg)の下限をトリップワイヤーにしています。</p>`;
+}
+
+/**
+ * 食物繊維・ビタミンD・カルシウム・食塩相当量の基準値(js/micronutrients.js の
+ * microTargetsForAge)を、根拠となる年代区分つきで表示するだけのカード。
+ * 食事タブの参考栄養素カードが「今日どれだけ摂ったか」を見せるのに対し、
+ * こちらは「その基準値がどこから来ているか(年代・出典)」を確認する場所として分ける。
+ */
+function renderMicroCard(profile) {
+  const t = microTargetsForAge(profile.age);
+  const bandLabel = t.band === '18-29' ? '18〜29歳' : '30〜49歳';
+  return `<h2 style="margin-top:0">参考栄養素の基準値</h2>
+    <p class="muted">年齢${profile.age}歳 → ${bandLabel}の基準値を使用しています(日本人の食事摂取基準2025年版)。</p>
+    <p>食物繊維: <strong>${t.fibreG}g/日</strong> <span class="muted">目標量</span></p>
+    <p>ビタミンD: <strong>${t.vitaminDUg}µg/日</strong> <span class="muted">目安量(耐容上限量 ${t.vitaminDUlUg}µg)</span></p>
+    <p>カルシウム: <strong>${t.calciumMg}mg/日</strong> <span class="muted">推奨量(耐容上限量 ${t.calciumUlMg}mg)</span></p>
+    <p>食塩相当量: <strong>${t.saltG}g未満/日</strong> <span class="muted">目標量(重症化予防の目安 ${t.saltSevereG}g)</span></p>
+    <p class="muted">いずれも実測ではなく基準値です。食事タブの「参考栄養素」カードで今日の実際の記録と見比べられます。</p>`;
 }

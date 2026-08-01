@@ -20,12 +20,36 @@ function deepFreeze(value) {
   return value;
 }
 
+// targets.kcalFloor の既定値の根拠(js/energy.js の eaFloorKcal を参照):
+// 以前は「男性は1,500kcalを下回るべきでない」という出典不明の固定値だった。
+// これをEA(エネルギー可用性)フロア = 30 × FFM(kg) + 運動消費kcal (ACSM/AND/DC 2016)
+// に置き換える。ただしDEFAULTSはモジュール読み込み時に一度だけ確定する静的な値であり、
+// 実際のFFM(InBody記録が必要)はまだ存在しないため、ここでは「新規インストール直後、
+// InBody記録も運動記録もまだ無い状態」を仮定した保守的な初期値を計算しておく:
+//   仮のFFM = 60kg × (1 − 20%) = 48kg (このユーザー属性=162cm/60kg/初心者男性の
+//   体脂肪率として一般的なレンジの目安であり、実測ではない)
+//   運動消費 = 0kcal (記録がまだ無い時点での保守的な下限。運動記録が増えるほど
+//   js/nutrition.js の achievement() が計算する実際のEAフロアはこれより高くなる)
+//   floor = 30 × 48 + 0 = 1,440kcal
+// InBody記録が入り次第、achievement() はこの静的な既定値を使わず実測FFMベースの
+// EAフロアに自動的に切り替わる(js/nutrition.js 参照)。この値はあくまで
+// 「まだ何も記録していない最初の数日」のためのプレースホルダーであり、
+// targets.kcalFloor は引き続きユーザーが設定タブで上書き可能。
+const DEFAULT_KCAL_FLOOR = 1440;
+
 export const DEFAULTS = deepFreeze({
   profile: {
     height: 162,
     weight: 60,
+    // age/sex: js/energy.js の rmrTenHaaf(FFM不明時のフォールバック基礎代謝式)に必要。
+    // このアプリは単一ユーザー(男性)前提だが実年齢は把握していないため、
+    // 35歳を暫定の既定値とする(このアプリの研究メモが基礎代謝の計算例として使っている
+    // 年齢でもある)。実年齢が分かっている場合は正確な値に置き換えることが望ましいが、
+    // 現状の設定タブにはage入力欄が無いため、当面はこの既定値で計算される。
+    age: 35,
+    sex: 'male',
     startDate: null,
-    targets: { protein: 100, kcalMin: 1700, kcalMax: 1800, kcalFloor: 1500, alcoholMl: 500 }
+    targets: { protein: 100, kcalMin: 1700, kcalMax: 1800, kcalFloor: DEFAULT_KCAL_FLOOR, alcoholMl: 500 }
   },
   workouts: [],
   exercises: [],

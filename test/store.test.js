@@ -8,7 +8,14 @@ test('初回はデフォルト値を返す', () => {
   assert.deepEqual(store.get('workouts'), []);
   assert.equal(store.get('profile').height, 162);
   assert.equal(store.get('profile').targets.protein, 100);
-  assert.equal(store.get('profile').targets.kcalFloor, 1500);
+  // 1500固定値からEAフロア由来の既定値(js/store.js のDEFAULT_KCAL_FLOOR、js/energy.js 参照)に変更
+  assert.equal(store.get('profile').targets.kcalFloor, 1440);
+});
+
+test('profile はEA計算用の age/sex を既定値付きで持つ', () => {
+  const store = createStore(memoryStorage());
+  assert.equal(store.get('profile').age, 35);
+  assert.equal(store.get('profile').sex, 'male');
 });
 
 test('保存した値を読み戻せる', () => {
@@ -125,7 +132,7 @@ test('部分的な profile を保存してもデフォルトのネスト項目�
   const store = createStore(storage);
   const profile = store.get('profile');
   assert.equal(profile.targets.protein, 120);
-  assert.equal(profile.targets.kcalFloor, 1500);
+  assert.equal(profile.targets.kcalFloor, 1440);
   assert.equal(profile.height, 162);
 });
 
@@ -206,7 +213,7 @@ test('set() は型が違う値を拒否し、storage を壊さない', () => {
 test('set() は normalize を通す: 部分的な profile を渡してもデフォルトのネスト項目が補われる', () => {
   const store = createStore(memoryStorage());
   store.set('profile', { height: 170 });
-  assert.equal(store.get('profile').targets.kcalFloor, 1500);
+  assert.equal(store.get('profile').targets.kcalFloor, 1440);
   assert.equal(store.get('profile').height, 170);
 });
 

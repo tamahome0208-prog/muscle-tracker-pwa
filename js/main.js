@@ -77,9 +77,45 @@ async function loadSeed() {
     }
   }
 
+  // data/foods.json の脂質(fat)・炭水化物(carb)出典:
+  // ゆで卵・ごはん150gは文部科学省「日本食品標準成分表2020年版(八訂)」の該当食品
+  // (鶏卵/ゆで、水稲めし/精白米)を100gあたりの値から按分した目安値。
+  // プロテイン1杯・サラダチキン・おにぎり・発泡酒500ml・唐揚げは、加工食品/調理済み食品で
+  // 銘柄により差があるため、国内で流通する代表的な商品の栄養成分表示・一般的なレシピの
+  // 目安値から見積もった概算値(実測ではない)。既存のkcal/protein値も元々この性質の
+  // 概算値であり、fat/carbもそれに合わせた精度で扱う。
   if (store.get('foods').length === 0) {
     const res = await fetch('data/foods.json');
     if (res.ok) store.set('foods', await res.json());
+    // 新規インストールは既に最新のマスタ(fat/carb込み)そのものなので、
+    // 下のfoodsMacroSyncedV1分岐で無駄な再同期をしないようフラグを立てる
+    // (js/main.js の exercisesSyncedV2 と同じ考え方)。
+    store.set('profile', { ...store.get('profile'), foodsMacroSyncedV1: true });
+  } else if (!store.get('profile').foodsMacroSyncedV1) {
+    // 既存インストールの mt.foods には fat/carb フィールドが無いシードがそのまま
+    // localStorage に残っている(js/nutrition.js の dayTotals が「欠損は0ではなく
+    // 不明」として扱う対象そのもの)。exercisesSyncedV2 と同じ「一度きりの移行フラグ」で、
+    // id が一致するシード食品にだけ fat/carb を後から届ける。
+    // ユーザー自身がバーコード等で追加した食品(id が data/foods.json に無いもの)は
+    // 対象外のまま(fat/carbが無い=不明のまま)にする。これは実測できない値を
+    // 勝手に0や推測値で埋めない、という他のモジュールと同じ方針であり、判定を
+    // 諦めた手抜きではない。
+    try {
+      const res = await fetch('data/foods.json');
+      if (!res.ok) throw new Error(`食品マスタの取得に失敗しました (status ${res.status})`);
+      const master = await res.json();
+      const masterById = new Map(master.map((f) => [f.id, f]));
+      store.set('foods', store.get('foods').map((f) => {
+        const found = masterById.get(f.id);
+        return found ? { ...f, fat: found.fat, carb: found.carb } : f;
+      }));
+      store.set('profile', { ...store.get('profile'), foodsMacroSyncedV1: true });
+    } catch (err) {
+      // キャプティブポータル等でこのfetchが失敗しても、起動中のインストール済みアプリを
+      // 丸ごと落とさず今回の移行だけスキップする。失敗時はフラグを立てないので
+      // 次回起動時に自動的に再試行される。
+      console.warn('食品マスタのfat/carb移行に失敗しました。今回の起動はスキップします:', err);
+    }
   }
   const profile = store.get('profile');
   if (!profile.startDate) {

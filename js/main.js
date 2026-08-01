@@ -87,10 +87,11 @@ async function loadSeed() {
   if (store.get('foods').length === 0) {
     const res = await fetch('data/foods.json');
     if (res.ok) store.set('foods', await res.json());
-    // 新規インストールは既に最新のマスタ(fat/carb込み)そのものなので、
-    // 下のfoodsMacroSyncedV1分岐で無駄な再同期をしないようフラグを立てる
+    // 新規インストールは既に最新のマスタ(fat/carb・食物繊維/ビタミンD/カルシウム/
+    // 食塩相当量込み)そのものなので、下のfoodsMacroSyncedV1/foodsMicroSyncedV1
+    // 分岐で無駄な再同期をしないよう両方のフラグを立てる
     // (js/main.js の exercisesSyncedV2 と同じ考え方)。
-    store.set('profile', { ...store.get('profile'), foodsMacroSyncedV1: true });
+    store.set('profile', { ...store.get('profile'), foodsMacroSyncedV1: true, foodsMicroSyncedV1: true });
   } else if (!store.get('profile').foodsMacroSyncedV1) {
     // 既存インストールの mt.foods には fat/carb フィールドが無いシードがそのまま
     // localStorage に残っている(js/nutrition.js の dayTotals が「欠損は0ではなく
@@ -117,6 +118,65 @@ async function loadSeed() {
       console.warn('食品マスタのfat/carb移行に失敗しました。今回の起動はスキップします:', err);
     }
   }
+
+  // data/foods.json の食物繊維(fibre)・ビタミンD(vitaminD)・カルシウム(calcium)・
+  // 食塩相当量(salt)出典:
+  // 納豆・鮭の塩焼き・牛乳・ヨーグルト・さつまいも・干し椎茸は文部科学省
+  // 「日本食品標準成分表2020年版(八訂)」の該当食品を実際の1食分量から按分した目安値。
+  // 鮭のビタミンDが高いのはシロサケ/ベニザケ類に共通する特徴で、干し椎茸のビタミンDは
+  // 乾燥工程での天日干しに由来する(ACSM 2016が挙げる「屋内トレーニング中心のアスリート」
+  // 向けの数少ない植物性ビタミンD源)。プロテイン1杯・サラダチキン・おにぎり・
+  // 発泡酒500ml・唐揚げ・味噌汁は加工食品/調理済み食品で銘柄・レシピにより差があるため、
+  // 国内で流通する代表的な商品の栄養成分表示・一般的なレシピの目安値からの概算値
+  // (既存のkcal/protein/fat/carbと同じ精度で扱う。実測ではない)。
+  //
+  // このアプリが選んだ食物繊維・ビタミンD・カルシウム・食塩相当量の4項目は、
+  // 日本人・1〜2食/日・週3回のマシントレーニング+週2時間のバドミントン・
+  // ほぼ毎日飲酒という属性で不足/超過しやすいと判断した項目(js/micronutrients.js
+  // の冒頭コメント参照)。亜鉛・マグネシウム・ビタミンB群・鉄・オメガ3は
+  // このユーザー固有の欠乏根拠が無いため意図的に追加していない。
+  if (!store.get('profile').foodsMicroSyncedV1) {
+    // 既存インストールの mt.foods には、この移行より前の7種の食品しか無く
+    // 食物繊維/ビタミンD/カルシウム/食塩相当量フィールドも持たない。
+    // foodsMacroSyncedV1 と同じ「一度きりの移行フラグ」パターンで、
+    // (1) id が一致する既存の食品にはマスタの新フィールドを後から届け、
+    // (2) マスタにあってこの端末にまだ無い食品(今回追加した7種)を
+    //     末尾に追加する。(2)がfoodsMacroSyncedV1移行との違いで、
+    //     あちらは既存食品の更新のみで新規食品の追加はしていなかった。
+    try {
+      const res = await fetch('data/foods.json');
+      if (!res.ok) throw new Error(`食品マスタの取得に失敗しました (status ${res.status})`);
+      const master = await res.json();
+      const masterById = new Map(master.map((f) => [f.id, f]));
+      const existing = store.get('foods');
+      const existingIds = new Set(existing.map((f) => f?.id));
+      const MICRO_KEYS = ['fibre', 'vitaminD', 'calcium', 'salt', 'alcoholAbvPct'];
+      const updated = existing.map((f) => {
+        const found = f ? masterById.get(f.id) : null;
+        if (!found) return f;
+        const patch = {};
+        for (const key of MICRO_KEYS) {
+          if (found[key] !== undefined) patch[key] = found[key];
+        }
+        return { ...f, ...patch };
+      });
+      // この端末にまだ無い食品(新規追加された7種)を追加する。useCountはマスタの
+      // シード値(表示順のヒント)をそのまま引き継がず0にする: この端末での
+      // 実際の使用実績が無いのに、シードの初期値のせいでよく使う食品より
+      // 上位に表示されてしまうのを避けるため(js/nutrition.js の sortFoodsByUse 参照)。
+      const newFromMaster = master
+        .filter((f) => !existingIds.has(f.id))
+        .map((f) => ({ ...f, useCount: 0 }));
+      store.set('foods', [...updated, ...newFromMaster]);
+      store.set('profile', { ...store.get('profile'), foodsMicroSyncedV1: true });
+    } catch (err) {
+      // キャプティブポータル等でこのfetchが失敗しても、起動中のインストール済みアプリを
+      // 丸ごと落とさず今回の移行だけスキップする。失敗時はフラグを立てないので
+      // 次回起動時に自動的に再試行される。
+      console.warn('食品マスタの微量栄養素移行に失敗しました。今回の起動はスキップします:', err);
+    }
+  }
+
   const profile = store.get('profile');
   if (!profile.startDate) {
     store.set('profile', { ...profile, startDate: todayStr() });

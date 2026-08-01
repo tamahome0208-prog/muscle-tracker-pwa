@@ -1,9 +1,17 @@
 [
-  { "id": "protein_shake", "name": "プロテイン 1杯", "unit": "杯",  "kcal": 120, "protein": 24, "fat": 1.5, "carb": 3,  "useCount": 10 },
-  { "id": "boiled_egg",    "name": "ゆで卵",         "unit": "個",  "kcal": 76,  "protein": 6,  "fat": 5,   "carb": 0.2,"useCount": 8 },
-  { "id": "salad_chicken", "name": "サラダチキン",   "unit": "個",  "kcal": 114, "protein": 25, "fat": 1.5, "carb": 0.5,"useCount": 7 },
-  { "id": "onigiri",       "name": "おにぎり",       "unit": "個",  "kcal": 180, "protein": 3,  "fat": 0.4, "carb": 39, "useCount": 6 },
-  { "id": "happoshu_500",  "name": "発泡酒 500ml",   "unit": "本",  "kcal": 150, "protein": 0, "fat": 0,   "carb": 11, "alcoholMl": 500, "useCount": 9 },
-  { "id": "karaage",       "name": "唐揚げ",         "unit": "人前","kcal": 600, "protein": 35, "fat": 33,  "carb": 25, "useCount": 5 },
-  { "id": "rice_150",      "name": "ごはん 150g",    "unit": "杯",  "kcal": 234, "protein": 4,  "fat": 0.5, "carb": 53, "useCount": 5 }
+  { "id": "protein_shake", "name": "プロテイン 1杯", "unit": "杯",  "kcal": 120, "protein": 24, "fat": 1.5, "carb": 3,  "fibre": 0,   "vitaminD": 0,  "calcium": 80,  "salt": 0.3, "useCount": 10 },
+  { "id": "boiled_egg",    "name": "ゆで卵",         "unit": "個",  "kcal": 76,  "protein": 6,  "fat": 5,   "carb": 0.2,"fibre": 0,   "vitaminD": 0.9,"calcium": 26,  "salt": 0.2, "useCount": 8 },
+  { "id": "salad_chicken", "name": "サラダチキン",   "unit": "個",  "kcal": 114, "protein": 25, "fat": 1.5, "carb": 0.5,"fibre": 0,   "vitaminD": 0.1,"calcium": 6,   "salt": 1.0, "useCount": 7 },
+  { "id": "onigiri",       "name": "おにぎり",       "unit": "個",  "kcal": 180, "protein": 3,  "fat": 0.4, "carb": 39, "fibre": 0.3, "vitaminD": 0,  "calcium": 3,   "salt": 1.0, "useCount": 6 },
+  { "id": "happoshu_500",  "name": "発泡酒 500ml",   "unit": "本",  "kcal": 150, "protein": 0, "fat": 0,   "carb": 11, "fibre": 0,   "vitaminD": 0,  "calcium": 10,  "salt": 0,   "alcoholMl": 500, "alcoholAbvPct": 5, "useCount": 9 },
+  { "id": "karaage",       "name": "唐揚げ",         "unit": "人前","kcal": 600, "protein": 35, "fat": 33,  "carb": 25, "fibre": 0.5, "vitaminD": 0.2,"calcium": 15,  "salt": 1.8, "useCount": 5 },
+  { "id": "rice_150",      "name": "ごはん 150g",    "unit": "杯",  "kcal": 234, "protein": 4,  "fat": 0.5, "carb": 53, "fibre": 0.5, "vitaminD": 0,  "calcium": 3,   "salt": 0,   "useCount": 5 },
+
+  { "id": "natto",           "name": "納豆 1パック",       "unit": "パック", "kcal": 100, "protein": 8,  "fat": 5,   "carb": 6,   "fibre": 3,   "vitaminD": 0,   "calcium": 45,  "salt": 0.7, "useCount": 0 },
+  { "id": "salmon_shioyaki",  "name": "鮭の塩焼き 1切れ",  "unit": "切れ",   "kcal": 140, "protein": 22, "fat": 4,   "carb": 0.1, "fibre": 0,   "vitaminD": 25,  "calcium": 10,  "salt": 1.2, "useCount": 0 },
+  { "id": "milk_200",         "name": "牛乳 200ml",        "unit": "杯",     "kcal": 134, "protein": 6.6,"fat": 7.6, "carb": 9.6, "fibre": 0,   "vitaminD": 0.4, "calcium": 220, "salt": 0.2, "useCount": 0 },
+  { "id": "yogurt_100",       "name": "ヨーグルト 100g",   "unit": "個",     "kcal": 62,  "protein": 3.6,"fat": 3,   "carb": 4.9, "fibre": 0,   "vitaminD": 0,   "calcium": 120, "salt": 0.1, "useCount": 0 },
+  { "id": "sweet_potato_100", "name": "さつまいも(ふかし) 100g", "unit": "本", "kcal": 134, "protein": 1.2,"fat": 0.2, "carb": 31.5,"fibre": 2.3, "vitaminD": 0,   "calcium": 36,  "salt": 0,   "useCount": 0 },
+  { "id": "dried_shiitake",   "name": "干し椎茸(戻し) 3枚", "unit": "枚",     "kcal": 25,  "protein": 1.6,"fat": 0.1, "carb": 5,   "fibre": 4,   "vitaminD": 1.1, "calcium": 1,   "salt": 0,   "useCount": 0 },
+  { "id": "miso_soup",        "name": "味噌汁 1杯",        "unit": "杯",     "kcal": 40,  "protein": 2.5,"fat": 1.2, "carb": 3.5, "fibre": 0.8, "vitaminD": 0,   "calcium": 8,   "salt": 1.6, "useCount": 0 }
 ]

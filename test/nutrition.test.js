@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { dayTotals, achievement, sortFoodsByUse, bumpFoodUse } from '../js/nutrition.js';
+import { estimateFfmKg } from '../js/energy.js';
 
 const TARGETS = { protein: 100, kcalMin: 1700, kcalMax: 1800, kcalFloor: 1500, alcoholMl: 500 };
 
@@ -153,4 +154,31 @@ test('achievement: ffmKgが不正(0以下・非数値)なら固定targets.kcalFl
 test('achievement: EAフロアを上回っていればFFM既知でも警告は出ない', () => {
   const a = achievement({ kcal: 1700, protein: 100, alcoholMl: 0 }, TARGETS, { dayOver: true, ffmKg: 48, exerciseKcal: 184 });
   assert.ok(!a.warnings.some((w) => w.type === 'kcalFloor'));
+});
+
+// --- 回帰確認: InBody記録が無くてもEAフロアが運動消費を反映すること ---
+//
+// 以前は「InBody記録が無ければ ffmKg は null」という呼び出し側の実装のせいで、
+// 実際にトレーニングしているユーザーでも運動消費の項が丸ごと落ち、固定の
+// targets.kcalFloor(この既定値ですら1500→1440に下がっている)にフォールバックして
+// いた。js/energy.js の estimateFfmKg(bodyRecord, fallbackWeightKg) が
+// profile.weight から概算FFMを返すようになったことで、この経路でも
+// EAフロア(30×FFM+運動消費)が使われることを確認する。
+test('achievement: InBody記録が無くても(profile.weightからの概算FFM経由で)EAフロアで判定する(回帰確認)', () => {
+  // estimateFfmKg(null, 60) → FFM = 60kg × (1 − 20%) = 48kg, estimated: true
+  const ffmResult = estimateFfmKg(null, 60);
+  assert.equal(ffmResult.estimated, true);
+  assert.equal(ffmResult.ffmKg, 48);
+
+  const exerciseKcal = 132; // 直近7日の実測運動消費の例(js/energy.js dailyExerciseKcal相当)
+  // floor = 30*48 + 132 = 1572kcal。固定既定値1440はもちろん、旧既定値1500よりも高い。
+  const a = achievement({ kcal: 1460, protein: 100, alcoholMl: 0 }, TARGETS, {
+    dayOver: true,
+    ffmKg: ffmResult.ffmKg,
+    exerciseKcal
+  });
+  const w = a.warnings.find((x) => x.type === 'kcalFloor');
+  assert.ok(w, 'InBody記録が無くても運動消費を反映したEAフロアで警告が出るはず(以前は無警告になっていた回帰)');
+  assert.equal(w.level, 'danger');
+  assert.match(w.message, /1572/);
 });

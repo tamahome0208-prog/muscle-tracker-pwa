@@ -121,8 +121,13 @@ function renderEnergyCard() {
   const latest = latestBody(body);
   const today = todayStr();
 
-  const ffmKg = latest ? estimateFfmKg(latest) : null;
   const weightForExercise = currentBodyweight(body, profile);
+  // InBody記録が無くても profile.weight から概算FFMを使い続ける(体組成未計測=
+  // 判定しない、という回帰を避ける。js/energy.js の estimateFfmKg 参照)。
+  // ただしその場合は estimated: true が返るので、画面上で実測と区別して示す。
+  const ffmResult = estimateFfmKg(latest, weightForExercise);
+  const ffmKg = ffmResult ? ffmResult.ffmKg : null;
+  const ffmEstimated = ffmResult ? ffmResult.estimated : false;
   const exerciseKcal = dailyExerciseKcal(workouts, badminton, today, weightForExercise);
 
   const equationEstimate = equationMaintenanceEstimate({
@@ -147,21 +152,29 @@ function renderEnergyCard() {
         (${maintenance.method === 'trend' ? '直近の体重トレンドからの実測ベース推定' : '予測式によるおおまかな出発点の推定(実測ではありません)'})</p>
        <p class="muted">${maintenance.note}</p>`;
 
+  const ffmLabel = ffmEstimated ? `${ffmKg.toFixed(1)}kg(推定)` : `${ffmKg.toFixed(1)}kg`;
+  const ffmEstimatedNote = ffmEstimated
+    ? `<p class="muted">FFM(除脂肪量)はInBody記録が無いため実測ではなく、体重${weightForExercise.toFixed(1)}kg・
+        体脂肪率20%(このユーザー属性の一般的なレンジの目安。実測ではない)と仮定した概算値です。
+        ホームからInBodyを記録すると、以降は実測FFMに切り替わります。</p>`
+    : '';
+
   const eaBlock = hasFfm
-    ? `<p>EAフロア(警告ライン): <strong>${Math.round(floor)}kcal</strong>
-        <span class="muted">= 30 × FFM(${ffmKg.toFixed(1)}kg) + 運動消費(${Math.round(exerciseKcal)}kcal/日)</span></p>
+    ? `${ffmEstimatedNote}
+       <p>EAフロア(警告ライン): <strong>${Math.round(floor)}kcal</strong>
+        <span class="muted">= 30 × FFM(${ffmLabel}) + 運動消費(${Math.round(exerciseKcal)}kcal/日)</span></p>
        <p>EA最適ライン: <strong>${Math.round(optimal)}kcal</strong>
         <span class="muted">= 45 × FFM + 運動消費</span></p>
        ${currentEA !== null
          ? `<p>今日のEA: <strong>${currentEA.toFixed(1)} kcal/kg FFM/日</strong>
-             <span class="muted">= (摂取${Math.round(todayTotals.kcal)} − 運動${Math.round(exerciseKcal)}) / FFM${ffmKg.toFixed(1)}kg</span></p>`
+             <span class="muted">= (摂取${Math.round(todayTotals.kcal)} − 運動${Math.round(exerciseKcal)}) / FFM${ffmLabel}</span></p>`
          : '<p class="muted">今日はまだ食事記録が無いため、今日のEAはまだ計算できません。</p>'}
        <p class="muted">EA 30 kcal/kg FFM/日はACSM/AND/DC 2016の共同ポジションスタンドが根拠の警告ラインで、
         「下回った瞬間に何かが壊れる崖」ではありません。この閾値は元々女性のデータから
         導かれたもので、男性についてはより低く・より不確実な値しか根拠が無い
         (参考: Koehler et al. 2016は4日間15でもテストステロンの有意な変化なし)ため、
         保守的な目安として使っています。</p>`
-    : '<p class="muted">InBody記録が無いため、EAフロア・現在のEAは計算できません。ホームからInBody(体組成)を記録すると表示されます。</p>';
+    : '<p class="muted">体重が記録されていないため、EAフロア・現在のEAは計算できません。</p>';
 
   return `<h2 style="margin-top:0">エネルギー可用性(EA)</h2>
     ${maintenanceBlock}

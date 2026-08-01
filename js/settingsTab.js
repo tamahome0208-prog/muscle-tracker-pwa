@@ -90,17 +90,22 @@ export function renderSettingsTab() {
     // ACSM/AND/DC 2016)より低い警告ラインを設定しようとしていないか確認する。
     // ブロックはしない(このユーザー自身がEAフロアを下回る値を意図的に設定したい
     // 場面もありうるため)が、その場合に何が起きるか(EAの目安を下回っても警告が
-    // 出なくなる)を数字付きで伝える。InBody記録が無ければ判定できないので何も言わない。
+    // 出なくなる)を数字付きで伝える。
+    // InBody記録が無くても estimateFfmKg が今保存しようとしている体重から概算FFMを
+    // 返すため判定は続ける(体組成未計測=判定しない、という以前の回帰と同じ問題を
+    // ここでも避ける)。ただし概算FFMを使った場合はその旨を文言に明記する。
     const body = store.get('body');
     const latest = latestBody(body);
-    const ffmKg = latest ? estimateFfmKg(latest) : null;
+    const weightForExercise = currentBodyweight(body, { ...profile, weight });
+    const ffmResult = estimateFfmKg(latest, weightForExercise);
     let floorWarning = null;
-    if (Number.isFinite(ffmKg) && ffmKg > 0) {
-      const weightForExercise = currentBodyweight(body, { ...profile, weight });
+    if (ffmResult) {
+      const { ffmKg, estimated } = ffmResult;
       const exerciseKcal = dailyExerciseKcal(store.get('workouts'), store.get('badminton'), todayStr(), weightForExercise);
       const eaFloor = eaFloorKcal(ffmKg, exerciseKcal);
       if (Number.isFinite(eaFloor) && eaFloor > 0 && kcalFloor < eaFloor) {
-        floorWarning = `保存しました。ただしエネルギー可用性(EA)の目安では約${Math.round(eaFloor)}kcalが警告ラインの目安です。これより低く設定すると、その目安を下回っても「食べなさすぎ」警告が出ません`;
+        const basis = estimated ? '(体組成未計測のため体重からの概算FFM)' : '';
+        floorWarning = `保存しました。ただしエネルギー可用性(EA)の目安では約${Math.round(eaFloor)}kcalが警告ラインの目安です${basis}。これより低く設定すると、その目安を下回っても「食べなさすぎ」警告が出ません`;
       }
     }
 

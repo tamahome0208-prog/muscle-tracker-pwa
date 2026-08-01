@@ -24,12 +24,16 @@ export function renderStatusBar() {
 
   // EA(エネルギー可用性)フロアで下限警告を判定するため、直近のInBody記録から
   // FFM(除脂肪量)と直近7日の運動消費kcalを渡す(js/energy.js 参照)。
-  // InBody記録が無ければ ffmKg は null になり、achievement() は従来どおり
-  // targets.kcalFloor の固定値にフォールバックする。
+  // InBody記録が無い場合も estimateFfmKg が profile.weight から概算FFMを返すため、
+  // 運動はしているのにEA経路が完全に無効化される(=運動消費の項が丸ごと落ちて
+  // floorが必要以上に緩くなる)回帰を避ける。どちらの経路でも得られなければ ffmKg は
+  // null になり、achievement() は最終手段として targets.kcalFloor の固定値に
+  // フォールバックする。
   const body = store.get('body');
   const latest = latestBody(body);
-  const ffmKg = latest ? estimateFfmKg(latest) : null;
   const weightForExercise = currentBodyweight(body, profile);
+  const ffmResult = estimateFfmKg(latest, weightForExercise);
+  const ffmKg = ffmResult ? ffmResult.ffmKg : null;
   const exerciseKcal = dailyExerciseKcal(store.get('workouts'), store.get('badminton'), todayStr(), weightForExercise);
 
   const a = achievement(totals, targets, { dayOver, ffmKg, exerciseKcal });

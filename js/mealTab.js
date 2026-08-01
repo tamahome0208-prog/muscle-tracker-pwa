@@ -149,15 +149,25 @@ export function renderMealTab() {
     barcodeBtn.addEventListener('click', scanBarcode);
   }
 
+  // ボタンを disabled + title で無効化すると、タッチ操作ではツールチップが出ず
+  // 「押しても反応しない」だけに見え、機能の存在自体が発見できない。キー未設定
+  // （既定の状態）でも常にタップは受け付け、押した瞬間に機能の説明とキーが
+  // 必要なことを伝える（設定タブへの案内までがこの画面の責務。キーの入力・
+  // 発行はここでは行わない）。無言で何も起きない、は避ける。
   const hasKey = Boolean(store.get('settings').geminiKey);
+  const FEATURE_INFO = {
+    meal: '食事の写真から品目・カロリー・タンパク質を自動で読み取る機能です。',
+    receipt: 'レシートの写真から飲食物の品目を自動で読み取る機能です。'
+  };
   for (const [id, kind] of [['#btnPhoto', 'meal'], ['#btnReceipt', 'receipt']]) {
     const btn = $(id);
-    if (!hasKey) {
-      btn.disabled = true;
-      btn.title = '設定タブでGemini APIキーを登録すると使えます';
-    } else {
-      btn.addEventListener('click', () => pickAndAnalyze(kind));
-    }
+    btn.addEventListener('click', () => {
+      if (!hasKey) {
+        alert(`${FEATURE_INFO[kind]}設定タブでGemini APIキーを登録すると使えます。`);
+        return;
+      }
+      pickAndAnalyze(kind);
+    });
   }
 }
 

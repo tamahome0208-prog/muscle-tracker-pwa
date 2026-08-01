@@ -68,7 +68,7 @@ export function renderHomeTab() {
 
     ${!initial ? `
     <div class="card card-secondary">
-      <div class="muted">筋肉が落ち始めるまで（目安）</div>
+      <div class="muted">前回のトレーニングから</div>
       <div class="big">${detrainingHeadline(detraining)}</div>
       <div class="muted">${detrainingSub(detraining)}</div>
     </div>` : ''}
@@ -80,7 +80,7 @@ export function renderHomeTab() {
       </div>
       <div class="chips" style="margin-top:8px">
         <button id="btnBadminton">${icon('i-shuttle')} バドミントンを記録</button>
-        <button id="btnInbody">${icon('i-scale')} 体組成を記録</button>
+        <button id="btnInbody">${icon('i-scale')} InBody（体組成）を記録</button>
       </div>
     </div>
 
@@ -151,17 +151,23 @@ function feasibilitySub(f) {
  * 検出開始カウントダウン（daysUntilDetraining の結果）の見出し。
  * ペナルティではなく時計として見せるため、0またはoverdueのときも
  * 「今すぐ取り返せ」のような煽りではなく、次の一歩を促すだけの言い方にする。
+ *
+ * 「◯日で筋肉が落ち始める」という特定の日を断定する表現は使わない
+ * （js/workout.js の daysUntilDetraining 上のコメントにある研究の通り、
+ * 発症日を1点で特定できるほどの根拠は無い）。筋力はおよそ3週間は保たれ、
+ * 測定可能なサイズの低下はおよそ3〜6週間あたりから見え始める、という
+ * 情報として伝える。計画的な休養は失敗ではないので、過ぎても煽らない。
  */
 function detrainingHeadline(d) {
   if (d.lastDate === null) return 'まだ記録がありません';
   if (d.daysLeft > 0) return `あと${d.daysLeft}日`;
-  return '2週間空いています';
+  return 'ひとやすみ中';
 }
 
 function detrainingSub(d) {
   if (d.lastDate === null) return 'トレーニングを始めましょう';
-  if (d.daysLeft > 0) return `最後にジムへ行ってから${d.daysSince}日（14日は目安です）`;
-  return '軽めでいいので一度行く';
+  if (d.daysLeft > 0) return `最後にジムへ行ってから${d.daysSince}日。筋力はこのくらいの期間ならしっかり保たれると言われています`;
+  return `筋力はまだ大きくは落ちていないはず。見た目の変化は3〜6週間あたりから出始めると言われています。軽めでいいので一度行くと戻りやすい`;
 }
 
 function thisWeekVolume(weeks, today) {
@@ -205,14 +211,26 @@ function recordBadminton() {
  * 結果紙を撮れば3項目が埋まる。読めなければ手入力に落とす。
  * 3項目そろっていない記録は保存しない。body.js は欠損値を0扱いするため、
  * 1項目だけ欠けると差分が実際の値と大きくずれる（例: weight欠損で開始比 +59.8kg）
+ *
+ * 撮影の選択肢は Gemini APIキーの有無に関わらず常に提示する。かつては
+ * `hasKey && confirm(...)` としており、キー未設定（既定の状態）だと確認自体が
+ * 出ずに無言で手入力へ飛んでいた。これでは撮影という機能が存在すること自体を
+ * ユーザーが知りようがない。キーが無い場合は「撮影する」を選んだ時点で、
+ * 設定タブでキーを登録すれば使えることを伝えたうえで手入力に落とす
+ * （行き止まりにしない）。ここではキーの入力・発行までは行わない
+ * （設定タブへの案内までがこの画面の責務）。
  */
 async function recordBody() {
   const hasKey = Boolean(store.get('settings').geminiKey);
-  const usePhoto = hasKey && confirm('インボディの結果紙を撮影して読み取りますか？\n（キャンセルすると手入力になります）');
+  const usePhoto = confirm('InBodyの結果紙を撮影して読み取りますか？\n（キャンセルすると手入力になります）');
 
   let values = null;
   if (usePhoto) {
-    values = await readInbodyPhoto();
+    if (!hasKey) {
+      alert('この機能を使うには設定タブでGemini APIキーを登録してください。続けて手入力に進みます。');
+    } else {
+      values = await readInbodyPhoto();
+    }
   }
   if (!values) {
     openBodyForm(saveBodyValues);
@@ -272,6 +290,7 @@ function openBodyForm(onSave) {
   dialog.className = 'card';
   dialog.innerHTML = `
     <h2 style="margin-top:0">体組成を記録</h2>
+    <p class="muted" style="margin-top:0">結果紙を撮影すれば、この3項目は自動で入力できます</p>
     <div class="ex-ctrl">体重 <input type="number" inputmode="decimal" id="bfWeight" value="60" style="width:90px">kg</div>
     <div class="ex-ctrl">筋肉量 <input type="number" inputmode="decimal" id="bfMuscle" value="45" style="width:90px">kg</div>
     <div class="ex-ctrl">体脂肪率 <input type="number" inputmode="decimal" id="bfFat" value="20" style="width:90px">%</div>

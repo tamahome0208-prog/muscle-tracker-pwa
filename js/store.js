@@ -49,7 +49,17 @@ export const DEFAULTS = deepFreeze({
     age: 35,
     sex: 'male',
     startDate: null,
-    targets: { protein: 100, kcalMin: 1700, kcalMax: 1800, kcalFloor: DEFAULT_KCAL_FLOOR, alcoholMl: 500 }
+    targets: { protein: 100, kcalMin: 1700, kcalMax: 1800, kcalFloor: DEFAULT_KCAL_FLOOR, alcoholMl: 500 },
+    // ALDH2(アルコール分解酵素)のフラッシング(飲酒で顔が赤くなる)質問への回答。
+    // null = 未回答(js/mealTab.js が食事タブで一度だけ質問を出す)。
+    // 'yes' / 'no' / 'skipped' のいずれかになった後は自動では二度と質問を出さない
+    // (設定タブからいつでも再回答できる。js/settingsTab.js 参照)。
+    aldh2Flushing: null,
+    // 'yes' 回答時に一度だけ出す注記(js/mealTab.js)を閉じたかどうか。
+    // 「今日は消したが明日また出る」という日次の再表示はしない(ブリーフの要求通り、
+    // 毎日繰り返さない)。設定タブで回答を'yes'に変更した場合はこのフラグを
+    // falseに戻し、少なくとも一度は再度目にするようにする。
+    aldh2NoticeDismissed: false
   },
   workouts: [],
   exercises: [],

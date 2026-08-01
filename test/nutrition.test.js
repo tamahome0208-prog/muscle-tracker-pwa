@@ -22,9 +22,10 @@ test('その日の合計だけを集計する', () => {
   assert.equal(t.alcoholMl, 500);
 });
 
-test('記録が無い日は0になる(ただしfat/carbはunknown扱い。まだ何も記録していないだけで実測ゼロではない)', () => {
+test('記録が無い日は0になる(ただしfat/carb/fibre/vitaminD/calcium/saltはunknown扱い。まだ何も記録していないだけで実測ゼロではない)', () => {
   assert.deepEqual(dayTotals(MEALS, '2026-01-01'), {
-    kcal: 0, protein: 0, alcoholMl: 0, fat: 0, carb: 0, fatKnown: false, carbKnown: false
+    kcal: 0, protein: 0, alcoholMl: 0, alcoholG: 0, alcoholKcal: 0, fat: 0, carb: 0, fibre: 0, vitaminD: 0, calcium: 0, salt: 0,
+    fatKnown: false, carbKnown: false, fibreKnown: false, vitaminDKnown: false, calciumKnown: false, saltKnown: false
   });
 });
 
@@ -162,7 +163,10 @@ test('bumpFoodUse は使用回数を1増やした新しい配列を返す', () =
 
 test('まだ何も記録していない日(kcal:0)は「食べなさすぎ」警告を出さない', () => {
   const t = dayTotals([], '2026-07-29');
-  assert.deepEqual(t, { kcal: 0, protein: 0, alcoholMl: 0, fat: 0, carb: 0, fatKnown: false, carbKnown: false });
+  assert.deepEqual(t, {
+    kcal: 0, protein: 0, alcoholMl: 0, alcoholG: 0, alcoholKcal: 0, fat: 0, carb: 0, fibre: 0, vitaminD: 0, calcium: 0, salt: 0,
+    fatKnown: false, carbKnown: false, fibreKnown: false, vitaminDKnown: false, calciumKnown: false, saltKnown: false
+  });
   const a = achievement(t, TARGETS);
   assert.ok(!a.warnings.some((w) => w.type === 'kcalFloor'));
 });
@@ -176,8 +180,74 @@ test('dayTotals は壊れたmealレコードを例外を投げずに読み飛ば
     { id: 'items-not-array', datetime: '2026-07-29T20:00', items: 'garbage' }
   ];
   assert.deepEqual(dayTotals(meals, '2026-07-29'), {
-    kcal: 100, protein: 10, alcoholMl: 0, fat: 0, carb: 0, fatKnown: false, carbKnown: false
+    kcal: 100, protein: 10, alcoholMl: 0, alcoholG: 0, alcoholKcal: 0, fat: 0, carb: 0, fibre: 0, vitaminD: 0, calcium: 0, salt: 0,
+    fatKnown: false, carbKnown: false, fibreKnown: false, vitaminDKnown: false, calciumKnown: false, saltKnown: false
   });
+});
+
+// --- 食物繊維・ビタミンD・カルシウム・食塩相当量・純アルコール(g)の集計 ---
+
+test('dayTotals: fibre/vitaminD/calcium/saltが全品目に記録されていれば合計しKnownはtrueのまま', () => {
+  const meals = [
+    { id: 'm1', datetime: '2026-08-01T19:00', items: [
+      { name: '納豆', kcal: 100, protein: 8, fibre: 3, vitaminD: 0, calcium: 45, salt: 0.7 },
+      { name: '鮭', kcal: 140, protein: 22, fibre: 0, vitaminD: 25, calcium: 10, salt: 1.2 }
+    ] }
+  ];
+  const t = dayTotals(meals, '2026-08-01');
+  assert.equal(t.fibre, 3);
+  assert.equal(t.vitaminD, 25);
+  assert.equal(t.calcium, 55);
+  assert.equal(t.salt, 1.9);
+  assert.equal(t.fibreKnown, true);
+  assert.equal(t.vitaminDKnown, true);
+  assert.equal(t.calciumKnown, true);
+  assert.equal(t.saltKnown, true);
+});
+
+test('dayTotals: 一部の品目だけfibre/vitaminD/calcium/saltが欠けていればKnownをfalseにする(過小合計であることを示す)', () => {
+  const meals = [
+    { id: 'm1', datetime: '2026-08-01T19:00', items: [
+      { name: '納豆', kcal: 100, protein: 8, fibre: 3, vitaminD: 0, calcium: 45, salt: 0.7 },
+      { name: '唐揚げ(旧レコード)', kcal: 600, protein: 35 }
+    ] }
+  ];
+  const t = dayTotals(meals, '2026-08-01');
+  assert.equal(t.fibre, 3);
+  assert.equal(t.calcium, 45);
+  assert.equal(t.fibreKnown, false);
+  assert.equal(t.vitaminDKnown, false);
+  assert.equal(t.calciumKnown, false);
+  assert.equal(t.saltKnown, false);
+});
+
+test('dayTotals: 純アルコール(alcoholG) = ml × 度数% ÷ 100 × 0.8。度数未指定なら既定の5%を使う(500ml・5%で20g)', () => {
+  const meals = [
+    { id: 'm1', datetime: '2026-08-01T21:00', items: [{ name: '発泡酒500ml', kcal: 150, protein: 0, alcoholMl: 500 }] }
+  ];
+  const t = dayTotals(meals, '2026-08-01');
+  assert.equal(t.alcoholMl, 500);
+  assert.equal(t.alcoholG, 20);
+});
+
+test('dayTotals: 品目にalcoholAbvPctがあればそちらを使う(既定の5%を上書きする)', () => {
+  const meals = [
+    { id: 'm1', datetime: '2026-08-01T21:00', items: [{ name: '缶チューハイ500ml(9%)', kcal: 200, protein: 0, alcoholMl: 500, alcoholAbvPct: 9 }] }
+  ];
+  const t = dayTotals(meals, '2026-08-01');
+  assert.equal(t.alcoholG, 500 * 0.09 * 0.8);
+});
+
+test('dayTotals: alcoholKcalはアルコール品目(alcoholMl>0)のkcalだけを合計する(固定値を決め打ちしない)', () => {
+  const meals = [
+    { id: 'm1', datetime: '2026-08-01T19:00', items: [
+      { name: '唐揚げ', kcal: 600, protein: 35 },
+      { name: '発泡酒500ml', kcal: 150, protein: 0, alcoholMl: 500 }
+    ] }
+  ];
+  const t = dayTotals(meals, '2026-08-01');
+  assert.equal(t.alcoholKcal, 150);
+  assert.equal(t.kcal, 750);
 });
 
 test('targetsの分母が0または非有限なら達成率は0%として扱う（Infinity/NaNを出さない）', () => {

@@ -1,4 +1,5 @@
 import { eaFloorKcal } from './energy.js';
+import { alcoholGrams, DEFAULT_ALCOHOL_ABV_PCT } from './micronutrients.js';
 
 /** 数値化できない値は0として扱い、NaN/文字列連結の伝播を防ぐ */
 function toNum(v) {
@@ -13,31 +14,51 @@ function hasNumericField(item, key) {
 }
 
 /**
- * その日の kcal / タンパク質 / アルコール量 / 脂質 / 炭水化物を合計する。
+ * その日の kcal / タンパク質 / アルコール量 / 脂質 / 炭水化物 / 食物繊維 / ビタミンD /
+ * カルシウム / 食塩相当量 を合計する。
  *
  * meals は OCR 経路や store.importAll(配列かどうかしか検証しない)から入る
  * 信頼できない境界のデータなので、壊れたレコード1件で集計全体が落ちないよう
  * 例外を投げず読み飛ばす。js/workout.js の weeklyVolume が不正な日付の記録を
  * 除外して継続するのと同じ設計判断。
  *
- * 【fat/carbの「不明」と「0」の区別について】
+ * 【fat/carb/fibre/vitaminD/calcium/salt の「不明」と「0」の区別について】
  * data/foods.json の既存シード食品や、このアプリがこれまでに記録してきた食事には
- * そもそも fat/carb フィールドが存在しない(js/main.js の foodsMacroSyncedV1 移行前の
- * データ、手入力・OCR確認画面を経ずに保存された古い記録等)。これを toNum() で
- * 一律0として合計すると、「今日は脂質0g(=何も脂質を摂っていない実測値)」と
+ * そもそもこれらのフィールドが存在しない(js/main.js の foodsMacroSyncedV1/
+ * foodsMicroSyncedV1 移行前のデータ、手入力を経ずに保存された古い記録等)。これを
+ * toNum() で一律0として合計すると、「今日は脂質0g(=何も脂質を摂っていない実測値)」と
  * 「今日の記録には脂質のデータが1件も無い(=未計測)」の区別がつかなくなり、
  * ユーザーが「脂質0g」という嘘の実測値を見せられることになる(このユーザーは
- * カロリーを削りたい衝動があるため、意図せず「脂質も足りている」という誤った
- * 安心材料を与えかねない)。
- * そのため fat/carb は「数値として記録されていた品目だけ」を合計し、1件でも
- * fat/carbフィールドを持たない品目がその日にあれば fatKnown/carbKnown を false にする
- * (=その日の合計は過小である可能性があり、真の0gではないことを示す)。
+ * カロリーを削りたい衝動があるため、意図せず「足りている」という誤った
+ * 安心材料を与えかねない)。この設計はfat/carbで既に採用済みのもので、
+ * 食物繊維・ビタミンD・カルシウム・食塩相当量の4項目にもそのまま適用する。
+ * そのため各項目は「数値として記録されていた品目だけ」を合計し、1件でも
+ * そのフィールドを持たない品目がその日にあれば対応する *Known を false にする
+ * (=その日の合計は過小である可能性があり、真の0であることを示さない)。
  * その日に記録が1件も無い場合(hasItems=false)も、kcal:0 の扱いと同様「まだ何も
- * 記録していない」であって「脂質摂取ゼロを実測した」わけではないため、
- * fatKnown/carbKnown は false のままにする。
+ * 記録していない」であって「摂取ゼロを実測した」わけではないため、
+ * 各 *Known は false のままにする。
+ *
+ * 【純アルコール(alcoholG)・alcoholKcalについて】
+ * alcoholMl(飲料の量, ml)はそのまま維持しつつ、js/micronutrients.js の
+ * alcoholGrams() で純アルコール量(g)も合わせて計算する。度数(alcoholAbvPct)を
+ * 品目が持たない場合はこのユーザーの実際の飲酒習慣(500ml・5%)に基づく既定値
+ * (DEFAULT_ALCOHOL_ABV_PCT)にフォールバックする。alcoholMl自体が既存コードで
+ * 「不明」を区別していない(欠損は既定で0扱い)のに合わせ、alcoholG/alcoholKcalも
+ * 同様に *Known は持たない(常に計算できる派生値として扱う)。
+ * alcoholKcalは「アルコール飲料として記録された品目のkcal」の合計(発泡酒のように
+ * 炭水化物由来のkcalも含む、実際に記録された値)。js/mealTab.js が「純アルコールは
+ * 1日のカロリー予算のうち最も手軽に取り戻せる分」という文脈を見せる際、
+ * 220kcalのような固定値を決め打ちで表示せず、実際に記録された値から計算する
+ * ためにここで用意する(このアプリの食品マスタのkcal自体が銘柄依存の概算であり、
+ * 固定値を騙ると実際の記録とずれるため)。
  */
 export function dayTotals(meals, dateStr) {
-  const totals = { kcal: 0, protein: 0, alcoholMl: 0, fat: 0, carb: 0, fatKnown: true, carbKnown: true };
+  const totals = {
+    kcal: 0, protein: 0, alcoholMl: 0, alcoholG: 0, alcoholKcal: 0, fat: 0, carb: 0,
+    fibre: 0, vitaminD: 0, calcium: 0, salt: 0,
+    fatKnown: true, carbKnown: true, fibreKnown: true, vitaminDKnown: true, calciumKnown: true, saltKnown: true
+  };
   let hasItems = false;
   for (const meal of meals) {
     if (!meal || typeof meal.datetime !== 'string') continue;
@@ -49,15 +70,29 @@ export function dayTotals(meals, dateStr) {
       totals.kcal += toNum(item.kcal);
       totals.protein += toNum(item.protein);
       totals.alcoholMl += toNum(item.alcoholMl);
+      totals.alcoholG += alcoholGrams(item.alcoholMl, item.alcoholAbvPct ?? DEFAULT_ALCOHOL_ABV_PCT);
+      if (toNum(item.alcoholMl) > 0) totals.alcoholKcal += toNum(item.kcal);
       if (hasNumericField(item, 'fat')) totals.fat += Number(item.fat);
       else totals.fatKnown = false;
       if (hasNumericField(item, 'carb')) totals.carb += Number(item.carb);
       else totals.carbKnown = false;
+      if (hasNumericField(item, 'fibre')) totals.fibre += Number(item.fibre);
+      else totals.fibreKnown = false;
+      if (hasNumericField(item, 'vitaminD')) totals.vitaminD += Number(item.vitaminD);
+      else totals.vitaminDKnown = false;
+      if (hasNumericField(item, 'calcium')) totals.calcium += Number(item.calcium);
+      else totals.calciumKnown = false;
+      if (hasNumericField(item, 'salt')) totals.salt += Number(item.salt);
+      else totals.saltKnown = false;
     }
   }
   if (!hasItems) {
     totals.fatKnown = false;
     totals.carbKnown = false;
+    totals.fibreKnown = false;
+    totals.vitaminDKnown = false;
+    totals.calciumKnown = false;
+    totals.saltKnown = false;
   }
   return totals;
 }

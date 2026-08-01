@@ -293,10 +293,32 @@ export function weekFeasibility(workouts, todayStr, perWeek = 3) {
 }
 
 /**
- * 最後にジムへ行った日から、無トレーニングによる筋力低下が測定され始めるとされる
- * 目安期間（既定14日）までの残り日数を返す。ペナルティではなく時計として扱うため、
- * 期間を過ぎても何かを減点したりはしない。呼び出し側（UI）はこの目安を「事実」として
- * ではなく「目安」として提示すること。
+ * 最後にジムへ行った日からの経過日数をもとに、既定 windowDays（21日）までの
+ * 残り日数を返す。ペナルティではなく時計として扱うため、期間を過ぎても何かを
+ * 減点したりはしない。呼び出し側（UI）はこの目安を「◯日で筋肉が落ち始める」という
+ * 確定した事実としてではなく、大まかな目安として提示すること。
+ *
+ * windowDays の既定値を21日とする根拠（14日を裏付ける研究は無いため、根拠なく
+ * 戻さないこと）:
+ * - Encarnación et al. 2022 (Muscles 1(1)): 20試験・616名を対象にしたシステマティック
+ *   レビュー。収録された研究のディトレーニング期間は3週間〜4年に及ぶが、2週間を
+ *   対象にした研究は1件も含まれていない。レビュー自体の結論も「発症時期を特定
+ *   できるほど根拠は十分ではない」としている。
+ * - Ogasawara et al. 2011 (Clin Physiol Funct Imaging 31(5):399-404): 未トレーニングの
+ *   男性（体重・身長ともこのアプリの想定ユーザーに近い）が3週間休止した結果、
+ *   1RM -1.2%・上腕三頭筋CSA -2.2%・大胸筋CSA -5.7%はいずれも統計的有意差なし。
+ *   同研究では休止を挟んだ群が総トレーニング量26%少ないにもかかわらず、15週間後の
+ *   到達点は連続トレーニング群と統計的に同等だった。
+ * - Hwang et al. 2017 (J Strength Cond Res 31(4):869-881): トレーニング経験者では
+ *   2週間の休止で筋力低下も除脂肪量の減少も見られなかった。
+ * - Ochi et al. 2018 (Front Physiol): 未トレーニングの男性が6週間休止した結果、
+ *   筋厚は約7%低下した一方、筋力は完全に維持されていた（サイズの低下が筋力より
+ *   先に来る）。
+ *
+ * これらを踏まえ、このアプリは「特定の日から筋肉が落ち始める」とは主張しない。
+ * 筋力はおよそ3週間（21日）は保たれ、測定可能なサイズの低下はおよそ3〜6週間
+ * あたりから見え始める、という程度の情報として扱う。21日は上記のうち最も早い
+ * 時点（3週間）に合わせた保守的な既定値であり、上限ではない。
  *
  * - lastDate: 有効な日付を持つ記録の中で最も新しい日付。1件も無ければ null。
  *   null のときは daysSince/daysLeft も意味を持たないため null を返し、overdue は false。
@@ -312,7 +334,7 @@ export function weekFeasibility(workouts, todayStr, perWeek = 3) {
  * workouts は storage / importAll 由来の信頼できないデータなので、date が欠損・不正な
  * レコードは黙って除外する。todayStr は他の集計関数と同様、アプリ内部の信頼できる値。
  */
-export function daysUntilDetraining(workouts, todayStr, windowDays = 14) {
+export function daysUntilDetraining(workouts, todayStr, windowDays = 21) {
   let lastDate = null;
   for (const w of workouts ?? []) {
     if (!isValidDateStr(w?.date)) continue;

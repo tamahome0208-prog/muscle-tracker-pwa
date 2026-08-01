@@ -584,33 +584,35 @@ test('weekFeasibility: 日付が欠損・不正な記録は例外を投げずに
   assert.equal(f.done, 1);
 });
 
-// --- daysUntilDetraining（最後のジムから目安14日までの残り） ---
+// --- daysUntilDetraining（最後のジムから目安21日までの残り） ---
+// 既定値は21日（js/workout.js 内のコメントに根拠となる研究を記載）。
+// 14日を裏付ける研究は無いため、境界テストも21日基準に合わせてある。
 
 test('daysUntilDetraining: 記録が無ければ lastDate は null で overdue も false', () => {
   const d = daysUntilDetraining([], '2026-07-29');
   assert.deepEqual(d, { lastDate: null, daysSince: null, daysLeft: null, overdue: false });
 });
 
-test('daysUntilDetraining: 13日経過なら残り1日でoverdueではない', () => {
-  const workouts = [{ date: '2026-07-16', program: 'A' }];
+test('daysUntilDetraining: 20日経過なら残り1日でoverdueではない', () => {
+  const workouts = [{ date: '2026-07-09', program: 'A' }];
   const d = daysUntilDetraining(workouts, '2026-07-29');
-  assert.equal(d.daysSince, 13);
+  assert.equal(d.daysSince, 20);
   assert.equal(d.daysLeft, 1);
   assert.equal(d.overdue, false);
 });
 
-test('daysUntilDetraining: 14日経過（目安ちょうど）は残り0だがoverdueではない', () => {
-  const workouts = [{ date: '2026-07-15', program: 'A' }];
+test('daysUntilDetraining: 21日経過（目安ちょうど）は残り0だがoverdueではない', () => {
+  const workouts = [{ date: '2026-07-08', program: 'A' }];
   const d = daysUntilDetraining(workouts, '2026-07-29');
-  assert.equal(d.daysSince, 14);
+  assert.equal(d.daysSince, 21);
   assert.equal(d.daysLeft, 0);
   assert.equal(d.overdue, false);
 });
 
-test('daysUntilDetraining: 15日経過は残り0でoverdue', () => {
-  const workouts = [{ date: '2026-07-14', program: 'A' }];
+test('daysUntilDetraining: 22日経過は残り0でoverdue', () => {
+  const workouts = [{ date: '2026-07-07', program: 'A' }];
   const d = daysUntilDetraining(workouts, '2026-07-29');
-  assert.equal(d.daysSince, 15);
+  assert.equal(d.daysSince, 22);
   assert.equal(d.daysLeft, 0);
   assert.equal(d.overdue, true);
 });
@@ -640,7 +642,15 @@ test('daysUntilDetraining: 未来日付の記録はdaysSince/daysLeftを負・�
   const workouts = [{ date: '2026-08-05', program: 'A' }]; // todayより後
   const d = daysUntilDetraining(workouts, '2026-07-29');
   assert.equal(d.daysSince, 0);
-  assert.equal(d.daysLeft, 14);
+  assert.equal(d.daysLeft, 21);
+  assert.equal(d.overdue, false);
+});
+
+test('daysUntilDetraining: windowDays は呼び出し側から設定可能', () => {
+  const workouts = [{ date: '2026-07-19', program: 'A' }];
+  const d = daysUntilDetraining(workouts, '2026-07-29', 14); // 10日経過をwindow=14で見る
+  assert.equal(d.daysSince, 10);
+  assert.equal(d.daysLeft, 4);
   assert.equal(d.overdue, false);
 });
 

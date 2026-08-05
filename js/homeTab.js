@@ -336,6 +336,8 @@ function openBodyForm(onSave) {
     <div class="ex-ctrl">体重 <input type="number" inputmode="decimal" id="bfWeight" value="60" style="width:90px">kg</div>
     <div class="ex-ctrl">筋肉量 <input type="number" inputmode="decimal" id="bfMuscle" value="45" style="width:90px">kg</div>
     <div class="ex-ctrl">体脂肪率 <input type="number" inputmode="decimal" id="bfFat" value="20" style="width:90px">%</div>
+    <div class="ex-ctrl">腰囲(任意) <input type="number" inputmode="decimal" id="bfWaist" placeholder="任意" style="width:90px">cm</div>
+    <p class="muted" style="margin-top:0">腰囲はInBodyより測定誤差が小さい安価なクロスチェックです。無くても保存できます。</p>
     <div class="chips">
       <button id="bfSave" class="primary">保存</button>
       <button id="bfCancel">やめる</button>
@@ -353,7 +355,11 @@ function openBodyForm(onSave) {
       toast('数値が読めませんでした');
       return;
     }
+    // 腰囲は任意項目。空欄・0以下・非数値ならフィールドごと省略する
+    // (旧来の3項目だけのレコードと完全に同じ形のまま保存できるようにする)。
+    const waistRaw = Number(dialog.querySelector('#bfWaist').value);
+    const waistCm = Number.isFinite(waistRaw) && waistRaw > 0 ? waistRaw : null;
     dialog.remove();
-    onSave({ weight, muscle, fatPct });
+    onSave(waistCm !== null ? { weight, muscle, fatPct, waistCm } : { weight, muscle, fatPct });
   });
 }

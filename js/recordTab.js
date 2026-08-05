@@ -16,6 +16,18 @@ import {
   equationMaintenanceEstimate,
   estimateMaintenance
 } from './energy.js';
+import {
+  bodyTrend,
+  goalProgress,
+  ffmi,
+  ffmiHeadroom,
+  projectLeanGainMonths,
+  checkRateSignals,
+  bodyFatGoalTension,
+  recentWeeklyWeightPctChange,
+  consecutiveFallingWeeks,
+  MEASUREMENT_NOISE_NOTE
+} from './goals.js';
 
 let store;
 
@@ -44,9 +56,14 @@ export function renderRecordTab() {
     <div class="card">
       <h2 style="margin-top:0">体組成</h2>
       <canvas id="bodyChart"></canvas>
-      ${latest ? `<div class="muted">最新 ${latest.date}: 体重${latest.weight}kg / 筋肉${latest.muscle}kg / 体脂肪${latest.fatPct}%</div>
+      ${latest ? `<div class="muted">最新 ${latest.date}: 体重${latest.weight}kg / 筋肉${latest.muscle}kg / 体脂肪${latest.fatPct}%${
+          Number.isFinite(Number(latest.waistCm)) && Number(latest.waistCm) > 0 ? ` / 腰囲${latest.waistCm}cm` : ''
+        }</div>
       <div class="muted">開始比: 体重${fmt(diff.weight)}kg / 筋肉<span class="up">${fmt(diff.muscle)}kg</span> / 体脂肪${fmt(diff.fatPct)}%</div>`
         : '<p class="muted">体組成の記録がありません。ホームから登録してください。</p>'}
+    </div>
+    <div class="card">
+      ${renderGoalCard()}
     </div>
     <div class="card">
       <h2 style="margin-top:0">部位レベル</h2>
@@ -110,6 +127,123 @@ function onRecordTabClick(e) {
 
 function fmt(n) {
   return (n >= 0 ? '+' : '') + n.toFixed(1);
+}
+
+/**
+ * 「目標(細マッチョ)への進捗」カード(js/goals.js)。単発の記録同士を比べる従来の
+ * bodyDiff(上の体組成カード「開始比」)とは別物であることを明示する: ここは
+ * 3点移動平均・8〜12週窓のトレンドが確立して初めて数値を出し、それ以外は
+ * 「まだ分からない」と正直に言う(js/goals.js の設計方針そのまま)。
+ */
+function renderGoalCard() {
+  const profile = store.get('profile');
+  const goal = profile.goal;
+  const body = store.get('body');
+  const workouts = store.get('workouts');
+  const badminton = store.get('badminton');
+  const meals = store.get('meals');
+  const latest = latestBody(body);
+  const today = todayStr();
+
+  const weightForExercise = currentBodyweight(body, profile);
+  const ffmResult = estimateFfmKg(latest, weightForExercise);
+  const currentFfmKg = ffmResult ? ffmResult.ffmKg : null;
+  const ffmEstimated = ffmResult ? ffmResult.estimated : false;
+  const currentFatPct = latest && Number.isFinite(Number(latest.fatPct)) ? Number(latest.fatPct) : null;
+
+  const trend = bodyTrend(body, today);
+  const exerciseKcal = dailyExerciseKcal(workouts, badminton, today, weightForExercise);
+
+  if (currentFfmKg === null) {
+    return `<h2 style="margin-top:0">目標(細マッチョ)への進捗</h2>
+      <p class="muted">体重が記録されていないため、目標への進捗は計算できません。</p>`;
+  }
+
+  const progress = goalProgress({
+    currentFfmKg,
+    currentBodyFatPct: currentFatPct,
+    targetFfmKg: goal.targetFfmKg,
+    targetBodyFatPct: goal.targetBodyFatPct
+  });
+
+  const currentFfmi = ffmi(currentFfmKg, profile.height / 100);
+  const headroom = currentFfmi !== null ? ffmiHeadroom(currentFfmi) : null;
+
+  const projection = projectLeanGainMonths({
+    currentFfmKg,
+    targetFfmKg: goal.targetFfmKg,
+    measuredRatePerMonthKg: trend ? trend.ffmKg.ratePerMonthKg : null
+  });
+
+  // レート信号(js/goals.js の checkRateSignals)の入力を組み立てる。
+  // 筋力は専用の指標を記録していないため、週次総挙上量(js/workout.js の weeklyVolume)の
+  // 連続低下を近似として使う。進行中(まだ終わっていない)今週を「低下」として
+  // 数えないよう、weekFeasibility で今週が未達なら除外する(js/recordTab.js の
+  // weekSummary と同じ考え方)。
+  const weeks = weeklyVolume(workouts);
+  const feasibility = weekFeasibility(workouts, today);
+  const volumesForStrength = (feasibility && feasibility.remaining > 0 ? weeks.slice(0, -1) : weeks).map((w) => w.volume);
+  const fallingWeeks = consecutiveFallingWeeks(volumesForStrength);
+  const weightWeeklyPctChange = recentWeeklyWeightPctChange(body, today);
+  const ffmChangeKgOver8Weeks = trend ? trend.ffmKg.deltaKg : null;
+  const todayTotals = dayTotals(meals, today);
+  const eaKcalPerKgFfm = todayTotals.kcal > 0 ? energyAvailability(todayTotals.kcal, exerciseKcal, currentFfmKg) : null;
+
+  const problems = checkRateSignals({
+    weightWeeklyPctChange,
+    ffmChangeKgOver8Weeks,
+    strengthFallingWeeks: fallingWeeks,
+    eaKcalPerKgFfm
+  });
+
+  const tension = bodyFatGoalTension({
+    targetBodyFatPct: goal.targetBodyFatPct,
+    weightKg: weightForExercise,
+    exerciseKcal
+  });
+
+  const ffmLabel = ffmEstimated ? `${currentFfmKg.toFixed(1)}kg(推定)` : `${currentFfmKg.toFixed(1)}kg`;
+
+  const progressBlock = `<p>FFM(除脂肪量): 現在 <strong>${ffmLabel}</strong> → 目標 ${goal.targetFfmKg.toFixed(1)}kg
+      <span class="muted">(残り${progress.ffmKg.remainingKg >= 0 ? '+' : ''}${progress.ffmKg.remainingKg.toFixed(1)}kg)</span></p>
+    ${progress.bodyFatPct
+      ? `<p>体脂肪率: 現在 <strong>${progress.bodyFatPct.current.toFixed(1)}%</strong> → 目標 ${progress.bodyFatPct.target.toFixed(1)}%
+          <span class="muted">(残り${progress.bodyFatPct.remainingPct >= 0 ? '+' : ''}${progress.bodyFatPct.remainingPct.toFixed(1)}pt)</span></p>`
+      : ''}`;
+
+  const trendBlock = trend
+    ? `<p class="muted">直近${trend.days}日のトレンド(3点移動平均): FFM ${trend.ffmKg.deltaKg >= 0 ? '+' : ''}${trend.ffmKg.deltaKg.toFixed(2)}kg
+        (月あたり約${trend.ffmKg.ratePerMonthKg >= 0 ? '+' : ''}${trend.ffmKg.ratePerMonthKg.toFixed(2)}kg)、
+        体脂肪率 ${trend.bodyFatPct.deltaPct >= 0 ? '+' : ''}${trend.bodyFatPct.deltaPct.toFixed(1)}pt</p>`
+    : '<p class="muted">まだ8〜12週分のトレンドが確立していないため、月間の進捗ペースは表示できません。</p>';
+
+  const projectionBlock = projection.reached
+    ? '<p>目標のFFMに到達しています。</p>'
+    : `<p>目標到達の目安: <strong>約${Math.ceil(projection.monthsRange[0])}〜${Math.ceil(projection.monthsRange[1])}ヶ月</strong>
+        <span class="muted">(${projection.basis === 'measured' ? 'あなた自身の実測トレンドが根拠' : '実測トレンドがまだ無いため文献レンジが根拠'})</span></p>
+       <p class="muted">${esc(projection.note)}</p>`;
+
+  const headroomBlock = headroom
+    ? `<p>FFMI: <strong>${headroom.ffmi.toFixed(1)}</strong>
+        <span class="muted">(自然な上限の目安${headroom.ceiling}まで、残り約${headroom.headroomFfmi.toFixed(1)})</span></p>
+       <p class="muted">FFMI 25はKouri et al. 1995で調査された薬物非使用アスリート42名全員が下回っていた値で、
+        「崖」ではなく典型的な上限の目安です。今の伸びしろは十分にあります。</p>`
+    : '';
+
+  const problemsBlock = problems.length
+    ? `<p class="warn danger" style="margin:8px 0"><strong>注意が必要な兆候</strong><br>${problems.map((p) => esc(p.message)).join('<br>')}</p>`
+    : '<p class="muted">現在、問題域に入っているレート信号はありません(体重・FFM・筋力・エネルギー可用性)。ただし男性ではRED-Sの兆候はしばしば体重計より先に内分泌・自覚症状に出るため、この4指標だけで「異常なし」と請け合うものではありません。</p>';
+
+  const tensionBlock = tension ? `<p class="warn warn" style="margin:8px 0">${esc(tension.message)}</p>` : '';
+
+  return `<h2 style="margin-top:0">目標(細マッチョ)への進捗</h2>
+    <p class="muted">${esc(MEASUREMENT_NOISE_NOTE)}</p>
+    ${progressBlock}
+    ${trendBlock}
+    ${projectionBlock}
+    ${headroomBlock}
+    ${problemsBlock}
+    ${tensionBlock}`;
 }
 
 /**

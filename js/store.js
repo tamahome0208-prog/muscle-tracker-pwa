@@ -59,7 +59,17 @@ export const DEFAULTS = deepFreeze({
     // 「今日は消したが明日また出る」という日次の再表示はしない(ブリーフの要求通り、
     // 毎日繰り返さない)。設定タブで回答を'yes'に変更した場合はこのフラグを
     // falseに戻し、少なくとも一度は再度目にするようにする。
-    aldh2NoticeDismissed: false
+    aldh2NoticeDismissed: false,
+    // 目標(js/goals.js)。ユーザーは細マッチョ(写真で示された、痩せ型で筋肉の輪郭が見える体型)を
+    // 目的として明言している。研究メモが示す翻訳(体脂肪8〜12%・FFMI 20〜21、162cmでは
+    // 体重ほぼ現状維持のままFFM約54kgへ)のうち、レンジの中央値をデフォルトとして計算しておく:
+    //   targetBodyFatPct: 10 (8〜12%の中央)
+    //   targetFfmKg: 54 (体重60kg・体脂肪10%相当。研究メモの試算をそのまま採用)
+    // この既定値は隠さず設定タブに表示し、いつでも上書きできるようにすること
+    // (ブリーフの要求: 「the default must be visible and editable, not hidden」)。
+    // 目標はユーザーのものであり、このアプリはクランプも拒否もしない
+    // (js/goals.js の bodyFatGoalTension が緊張関係を説明はするが、値そのものは変えない)。
+    goal: { targetBodyFatPct: 10, targetFfmKg: 54 }
   },
   workouts: [],
   exercises: [],

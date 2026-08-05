@@ -74,7 +74,15 @@ export const DEFAULTS = deepFreeze({
     bests: {},
     badges: []
   },
-  settings: { geminiKey: '', useOpenFoodFacts: true, photoReminder: true, wakeLock: true },
+  settings: {
+    geminiKey: '', useOpenFoodFacts: true, photoReminder: true, wakeLock: true,
+    // エクスポートを最後に行った日('YYYY-MM-DD')。未エクスポートなら null。
+    // js/backupReminder.js の shouldShowBackupReminder がこれを見て「最近バックアップしたか」を判定する。
+    lastExportDate: null,
+    // バックアップリマインダー(js/homeTab.js)を最後に「あとで」で閉じた日。
+    // 閉じてから一定期間(js/backupReminder.js の REMINDER_INTERVAL_DAYS)は再表示しない。
+    backupReminderDismissedAt: null
+  },
   // 進行中（未終了）のトレーニングセッション。Androidがバックグラウンドで
   // ページを破棄しても記録済みのセットを失わないための永続化用の場所。
   // date は「記録される対象の日付」(過去日の場合もある)、startedAt は

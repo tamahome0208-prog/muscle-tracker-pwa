@@ -8,6 +8,7 @@ import { sortFoodsByUse } from './nutrition.js';
 import { addFoodById } from './mealTab.js';
 import { latestBody } from './body.js';
 import { analyzeInbody, OcrError } from './ocr.js';
+import { shouldShowBackupReminder } from './backupReminder.js';
 
 const PROGRAM_NAMES = { A: '胸・肩・三頭', B: '背中・二頭', C: '脚・腹' };
 
@@ -28,16 +29,25 @@ export function renderHomeTab() {
   const workouts = store.get('workouts');
   const profile = store.get('profile');
   const game = store.get('game');
+  const settings = store.get('settings');
+  const meals = store.get('meals');
+  const bodyRecords = store.get('body');
+  const badminton = store.get('badminton');
   const today = todayStr();
   const program = nextProgram(workouts);
   const streak = calcStreak(workouts, today);
   const weeks = weeklyVolume(workouts);
   const initial = isInitialPhase(profile.startDate, today);
-  const status = initialPhaseStatus(workouts, store.get('meals'), today);
+  const status = initialPhaseStatus(workouts, meals, today);
   const feasibility = weekFeasibility(workouts, today);
   const detraining = daysUntilDetraining(workouts, today);
   const quickFoods = sortFoodsByUse(store.get('foods')).slice(0, 6);
-  const body = latestBody(store.get('body'));
+  const body = latestBody(bodyRecords);
+  // 「失うと惜しい量のデータ」があり、かつ最近バックアップ(エクスポート)していない場合だけ
+  // 出すリマインダー(js/backupReminder.js)。写真(IndexedDB)は同期的に数えられないため
+  // この判定には含めない(js/settingsTab.js の「データの状態」カードでは別途表示する)。
+  const recordCount = workouts.length + meals.length + bodyRecords.length + badminton.length;
+  const showBackupReminder = shouldShowBackupReminder(recordCount, settings, today);
 
   $('#tab-home').innerHTML = `
     <div class="card card-primary">
@@ -45,6 +55,8 @@ export function renderHomeTab() {
       <div class="big">【${program}】${PROGRAM_NAMES[program]}</div>
       <button id="btnGoWorkout" class="primary" style="margin-top:8px;width:100%">トレーニングを始める</button>
     </div>
+
+    ${showBackupReminder ? renderBackupReminderCard() : ''}
 
     <div class="card">
       <div class="muted">今週の達成状況</div>
@@ -91,6 +103,18 @@ export function renderHomeTab() {
     </div>`;
 
   $('#btnGoWorkout').addEventListener('click', () => showTab('workout'));
+  if (showBackupReminder) {
+    $('#btnGoBackup').addEventListener('click', () => showTab('settings'));
+    $('#btnDismissBackup').addEventListener('click', () => {
+      try {
+        store.set('settings', { ...settings, backupReminderDismissedAt: today });
+      } catch {
+        toast('保存できませんでした（端末の空き容量を確認してください）');
+        return;
+      }
+      renderHomeTab();
+    });
+  }
   $('#quickFoods').addEventListener('click', (e) => {
     const btn = e.target.closest('[data-food]');
     if (!btn) return;
@@ -99,6 +123,24 @@ export function renderHomeTab() {
   });
   $('#btnBadminton').addEventListener('click', recordBadminton);
   $('#btnInbody').addEventListener('click', recordBody);
+}
+
+/**
+ * バックアップ(JSONエクスポート)を促すリマインダーカード(js/backupReminder.js の
+ * shouldShowBackupReminder が true の間だけ表示)。設定タブに既にあるエクスポート機能を
+ * 誰にも気づかれないまま放置しないための導線。押しつけがましくならないよう、
+ * 「あとで」で今日から14日間は黙る(閉じた記録は settings.backupReminderDismissedAt に残す)。
+ */
+function renderBackupReminderCard() {
+  return `
+    <div class="card" id="backupReminderCard">
+      <h2 style="margin-top:0">バックアップのお願い</h2>
+      <p class="muted">記録がある程度たまりました。端末の故障・紛失や、ブラウザ側の自動削除に備えて、設定タブのJSONバックアップを一度取っておくと安心です。</p>
+      <div class="chips">
+        <button id="btnGoBackup" class="primary">設定でバックアップする</button>
+        <button id="btnDismissBackup">あとで</button>
+      </div>
+    </div>`;
 }
 
 /**

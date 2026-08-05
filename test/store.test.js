@@ -276,3 +276,29 @@ test('game.badges の補正は set() 経由でも(保存時にも)働く', () =>
   store.set('game', { ...game, badges: 999 });
   assert.deepEqual(store.get('game').badges, []);
 });
+
+// --- データ耐久性対応(永続化・バックアップリマインダー)の回帰テスト ---
+
+test('settings は既定で lastExportDate/backupReminderDismissedAt が null', () => {
+  const store = createStore(memoryStorage());
+  assert.equal(store.get('settings').lastExportDate, null);
+  assert.equal(store.get('settings').backupReminderDismissedAt, null);
+});
+
+test('既存インストール(この2項目を持たない古いsettings)でもdeepMergeで既定値が補われる', () => {
+  const storage = memoryStorage({
+    'mt.settings': JSON.stringify({ geminiKey: '', useOpenFoodFacts: true, photoReminder: true, wakeLock: true })
+  });
+  const store = createStore(storage);
+  assert.equal(store.get('settings').lastExportDate, null);
+  assert.equal(store.get('settings').backupReminderDismissedAt, null);
+  assert.equal(store.get('settings').useOpenFoodFacts, true);
+});
+
+test('lastExportDate/backupReminderDismissedAt を保存して読み戻せる', () => {
+  const store = createStore(memoryStorage());
+  const settings = store.get('settings');
+  store.set('settings', { ...settings, lastExportDate: '2026-08-04', backupReminderDismissedAt: '2026-08-01' });
+  assert.equal(store.get('settings').lastExportDate, '2026-08-04');
+  assert.equal(store.get('settings').backupReminderDismissedAt, '2026-08-01');
+});

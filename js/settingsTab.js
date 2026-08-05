@@ -5,6 +5,8 @@ import {
 } from './energy.js';
 import { latestBody, currentBodyweight } from './body.js';
 import { microTargetsForAge, applyAldh2Answer, alcoholGrams, ALCOHOL_RISK_G } from './micronutrients.js';
+import { readPersistedState, readStorageEstimate, persistedStateText, storageEstimateText } from './storageInfo.js';
+import { listPhotos } from './photos.js';
 
 let store;
 
@@ -17,6 +19,15 @@ export function renderSettingsTab() {
   const profile = store.get('profile');
   const settings = store.get('settings');
   const t = profile.targets;
+  // 写真(IndexedDB)以外は同期的に数えられるので、ここでそのまま数値化する。
+  // 写真の件数だけは fillStorageStatus() が非同期で埋める(下の #cntPhotos)。
+  const counts = {
+    workouts: store.get('workouts').length,
+    meals: store.get('meals').length,
+    body: store.get('body').length,
+    badminton: store.get('badminton').length,
+    foods: store.get('foods').length
+  };
 
   $('#tab-settings').innerHTML = `
     <div class="card">
@@ -69,6 +80,20 @@ export function renderSettingsTab() {
     </div>
 
     <div class="card">
+      <h2 style="margin-top:0">データの状態</h2>
+      <p id="storagePersistState" class="muted">確認中…</p>
+      <p id="storageEstimateState" class="muted"></p>
+      <p class="muted">
+        トレーニング ${counts.workouts}件 ・
+        食事 ${counts.meals}件 ・
+        体組成 ${counts.body}件 ・
+        バドミントン ${counts.badminton}件 ・
+        写真 <span id="cntPhotos">確認中…</span>枚 ・
+        食品マスタ ${counts.foods}件
+      </p>
+    </div>
+
+    <div class="card">
       <h2 style="margin-top:0">バックアップ</h2>
       <div class="chips">
         <button id="btnExport">エクスポート</button>
@@ -77,6 +102,11 @@ export function renderSettingsTab() {
       <p class="muted">記録データをJSONで書き出します。体の写真は含まれません（端末内のIndexedDBにのみ保存されます）。</p>
       <input type="file" id="importFile" accept="application/json" class="hidden">
     </div>`;
+
+  // 永続化状態・使用量・写真件数はいずれも非同期API(navigator.storage / IndexedDB)なので、
+  // 上の innerHTML 代入(同期部分)の後に埋める。タブを離れた後に解決してもクラッシュしない
+  // よう、更新の都度 $() で要素の存在を確認する(無ければ何もしない)。
+  fillStorageStatus();
 
   $('#btnSaveTargets').addEventListener('click', () => {
     const height = Number($('#tHeight').value);
@@ -188,6 +218,15 @@ export function renderSettingsTab() {
     a.download = `muscle-tracker-backup-${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
     URL.revokeObjectURL(a.href);
+    // js/homeTab.js のバックアップリマインダー(js/backupReminder.js)がこの日付を見て
+    // 「最近エクスポートしたか」を判定する。ファイル自体は既に書き出し済みなので、
+    // この保存が(容量不足等で)失敗してもトーストで知らせるだけに留め、
+    // エクスポートそのものが失敗したかのような表示はしない。
+    try {
+      store.set('settings', { ...store.get('settings'), lastExportDate: todayStr() });
+    } catch {
+      toast('エクスポートは完了しましたが、日付の記録に失敗しました（端末の空き容量を確認してください）');
+    }
   });
 
   $('#btnImport').addEventListener('click', () => $('#importFile').click());
@@ -203,6 +242,31 @@ export function renderSettingsTab() {
       toast(err.message);
     }
   });
+}
+
+/**
+ * 「データの状態」カードのうち非同期な項目(永続化状態・使用量・写真件数)を埋める。
+ * navigator.storage.persisted()/estimate() も IndexedDB(listPhotos)も同期APIではないため、
+ * renderSettingsTab 本体の同期的な innerHTML 代入の後にこちらで後埋めする。
+ * ユーザーがこの後すぐ別タブへ切り替えても($()がnullを返すだけで)クラッシュしない。
+ */
+async function fillStorageStatus() {
+  const persistState = await readPersistedState();
+  const persistEl = $('#storagePersistState');
+  if (persistEl) persistEl.textContent = persistedStateText(persistState);
+
+  const estimate = await readStorageEstimate();
+  const estimateEl = $('#storageEstimateState');
+  if (estimateEl) estimateEl.textContent = storageEstimateText(estimate);
+
+  const photosEl = $('#cntPhotos');
+  if (!photosEl) return;
+  try {
+    const photos = await listPhotos();
+    photosEl.textContent = String(photos.length);
+  } catch {
+    photosEl.textContent = '不明';
+  }
 }
 
 /**

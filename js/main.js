@@ -7,6 +7,7 @@ import { initRecordTab } from './recordTab.js';
 import { initHomeTab } from './homeTab.js';
 import { initSettingsTab } from './settingsTab.js';
 import { migrateHistoricalVolume } from './workout.js';
+import { requestPersistentStorage } from './storageInfo.js';
 
 export const store = createStore();
 
@@ -184,6 +185,20 @@ async function loadSeed() {
 }
 
 async function boot() {
+  // データの永続化を要求する(体の写真を含むIndexedDBを持つこのアプリは、Androidが
+  // 空き容量不足時にサイトデータを削除する対象になりやすい)。API自体が無い環境・
+  // promiseがrejectした場合・false(拒否)が返った場合のいずれも requestPersistentStorage
+  // 内部で例外を投げず処理するが、呼び出し側でも念のため try/catch で囲み、
+  // ここで何が起きても起動そのものは止めない。
+  try {
+    const persistence = await requestPersistentStorage();
+    if (persistence.supported && !persistence.persisted) {
+      console.info('永続ストレージは許可されませんでした。設定タブの「データの状態」で確認できます。');
+    }
+  } catch (err) {
+    console.warn('永続ストレージの要求中に予期しないエラーが発生しました:', err);
+  }
+
   try {
     const repaired = store.validate();
     if (repaired.length) {

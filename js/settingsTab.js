@@ -5,6 +5,7 @@ import {
 } from './energy.js';
 import { latestBody, currentBodyweight } from './body.js';
 import { microTargetsForAge, applyAldh2Answer, alcoholGrams, ALCOHOL_RISK_G } from './micronutrients.js';
+import { ffmi, HEALTHY_BODYFAT_RANGE_LOW, HEALTHY_BODYFAT_RANGE_HIGH } from './goals.js';
 import { readPersistedState, readStorageEstimate, persistedStateText, storageEstimateText } from './storageInfo.js';
 import { listPhotos } from './photos.js';
 
@@ -46,6 +47,10 @@ export function renderSettingsTab() {
         参考: MHLW「飲酒ガイドライン」(2024)は男性で生活習慣病のリスクが高まる目安を1日${ALCOHOL_RISK_G}gとしています。危険という意味ではなく、比較のための目安です。</p>
       <p class="muted">警告ラインを下回った日は「食べなさすぎ」の警告が出ます。摂取を削るほど筋肉が落ちるため、下限側を守る設計です。</p>
       <button id="btnSaveTargets" class="primary">保存</button>
+    </div>
+
+    <div class="card">
+      ${renderGoalCard(profile)}
     </div>
 
     <div class="card">
@@ -184,6 +189,26 @@ export function renderSettingsTab() {
     toast(floorWarning ?? '目標を保存しました', floorWarning ? 6000 : undefined);
   });
 
+  $('#btnSaveGoal').addEventListener('click', () => {
+    const targetBodyFatPct = Number($('#gTargetFat').value);
+    const targetFfmKg = Number($('#gTargetFfm').value);
+    // 目標そのものはユーザーのものなのでクランプ・拒否はしない(js/goals.js の
+    // bodyFatGoalTension が緊張関係を説明するだけで値は変えない、という設計と揃える)。
+    // ここで弾くのは「数値として読めない/0以下」という入力の壊れ方だけで、
+    // 目標の妥当性そのものへの介入ではない。
+    if (![targetBodyFatPct, targetFfmKg].every((n) => Number.isFinite(n) && n > 0)) {
+      toast('目標には0より大きい数値を入力してください');
+      return;
+    }
+    try {
+      store.set('profile', { ...profile, goal: { targetBodyFatPct, targetFfmKg } });
+    } catch {
+      toast('保存できませんでした（端末の空き容量を確認してください）');
+      return;
+    }
+    toast('目標を保存しました');
+  });
+
   $('#btnSaveAldh2').addEventListener('click', () => {
     const value = $('#tAldh2').value;
     const answer = value === '' ? null : value;
@@ -267,6 +292,29 @@ async function fillStorageStatus() {
   } catch {
     photosEl.textContent = '不明';
   }
+}
+
+/**
+ * 体組成の目標カード(js/goals.js)。ユーザーが明言した目的(細マッチョ、参考写真)を
+ * 翻訳した既定値(体脂肪10%・FFM54kg、いずれもレンジの中央値)を表示しつつ、
+ * 隠さずその場で書き換えられるようにする(ブリーフの要求)。目標はユーザーのものであり、
+ * このアプリは値をクランプも拒否もしない。js/recordTab.js 側でこの目標に対する
+ * 進捗・投影・緊張関係(健康的レンジ14〜18%を下回る場合)を表示する。
+ */
+function renderGoalCard(profile) {
+  const goal = profile.goal;
+  const targetFfmi = ffmi(goal.targetFfmKg, profile.height / 100);
+  return `<h2 style="margin-top:0">体組成の目標(細マッチョ)</h2>
+    <p class="muted" style="margin-top:0">写真で示された「細マッチョ」を翻訳した既定値です
+      (体脂肪8〜12%・FFMI 20〜21という目安のレンジの中央値)。この数値はいつでも書き換えられます。</p>
+    <div class="ex-ctrl">目標体脂肪率 <input type="number" inputmode="decimal" id="gTargetFat" value="${goal.targetBodyFatPct}" style="width:80px">%</div>
+    <div class="ex-ctrl">目標FFM(除脂肪量) <input type="number" inputmode="decimal" id="gTargetFfm" value="${goal.targetFfmKg}" style="width:80px">kg</div>
+    <p class="muted">目標FFMをFFMIに換算すると ${targetFfmi !== null ? targetFfmi.toFixed(1) : '計算できません'}
+      です(身長${profile.height}cmとして計算)。</p>
+    <p class="muted">研究が挙げる健康的な体脂肪率の目安は${HEALTHY_BODYFAT_RANGE_LOW}〜${HEALTHY_BODYFAT_RANGE_HIGH}%です。
+      これを下回る目標を設定した場合、記録タブにその緊張関係(出典の食い違い・エネルギー可用性との整合性)を表示します。
+      ブロックはしません。</p>
+    <button id="btnSaveGoal" class="primary">保存</button>`;
 }
 
 /**

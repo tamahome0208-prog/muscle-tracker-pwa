@@ -129,6 +129,40 @@ button:active { transform: scale(.97); }
   100% { transform: scale(1); box-shadow: 0 0 0 3px var(--pb); }
 }
 
+/* カレンダー(記録タブ)。月曜始まりの7列固定グリッド＋8列目に週次のジム実施回数。
+   gapを持たせず border で列を区切ることで、375px幅でも横スクロールせずに収まる
+   (main/.cardのpaddingを差し引いた幅を7等分すると1列あたり45px前後、8列目は
+   "3/3"が入る幅だけ確保すれば足りるので auto で狭くする)。 */
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr) auto; font-size: 11px; }
+.cal-wd { text-align: center; padding: 4px 0; color: var(--muted); font-weight: 600; }
+.cal-wd-count { padding-left: 4px; }
+/* 月境界のラベル。1/-1 で8列ぶん丸ごと使い、その週の直前に1行差し込む。
+   上にうっすら罫線を引いて「ここで区切れる」ことを視覚的にも示す。 */
+.cal-month-label { grid-column: 1 / -1; font-size: 12px; color: var(--muted); font-weight: 600;
+  padding: 8px 2px 2px; margin-top: 4px; border-top: 1px solid var(--line); }
+.cal-cell { display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 2px; min-height: 46px; border: 1px solid var(--line); cursor: pointer; }
+/* 今日のマス。太字＋アクセント色の枠で他の日と混同しないようにする */
+.cal-cell.today { border: 2px solid var(--accent); font-weight: 700; }
+/* 表示範囲外(今週のうちまだ来ていない未来日)。記録が存在しようがないので、
+   休養日(中点)とは別の見た目にする。タップもさせないので cursor も戻す。 */
+.cal-cell.future { opacity: .35; cursor: default; }
+.cal-daynum { font-variant-numeric: tabular-nums; }
+.cal-marks { display: flex; gap: 2px; align-items: center; justify-content: center; height: 12px; flex-wrap: nowrap; }
+.cal-dot { color: var(--muted); }
+/* ジムの日のプログラム(A/B/C)バッジ。汎用のバーベルアイコンより「どのプログラムか」が
+   一目でわかる(ユーザーが自分でA/B/Cを選ぶようになったため、こちらの方が情報量が多い)。
+   3プログラムとも同じ配色にする: 色分けすると「どれが良い/悪い」という誤読を招きうるため、
+   軽重の意味を持たせず単に文字で区別する。 */
+.cal-prog { display: inline-flex; align-items: center; justify-content: center;
+  min-width: 12px; height: 12px; padding: 0 2px; border-radius: 3px;
+  background: var(--accent); color: var(--on-accent); font-weight: 800; font-size: 9px; line-height: 1; }
+/* 週次のジム実施回数(例: 3/3)。週3回の目標に達していれば --ok(緑)で強調する
+   (ホームタブの今週の達成状況と同じ .up クラスを流用)。 */
+.cal-count { display: flex; align-items: center; justify-content: center; min-height: 46px;
+  border: 1px solid var(--line); border-left: none; font-weight: 700; font-variant-numeric: tabular-nums;
+  padding: 0 2px; }
+
 /* 写真 */
 .photo-stage { position: relative; background: #000; border-radius: 12px; overflow: hidden; }
 .photo-stage video, .photo-stage img { width: 100%; display: block; }

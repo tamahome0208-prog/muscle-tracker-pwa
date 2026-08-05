@@ -1,10 +1,12 @@
-import { $, onShow, todayStr, icon } from './ui.js';
+import { $, onShow, todayStr, icon, esc } from './ui.js';
 import { weeklyVolume, weekKey, previousWeekKey, weekFeasibility } from './workout.js';
 import { bodySeries, bodyDiff, latestBody, currentBodyweight } from './body.js';
 import { radarData, BADGES } from './game.js';
 import { loadChartJs, drawVolumeChart, drawBodyChart, drawRadarChart } from './charts.js';
 import { initDayView, renderDayView } from './dayView.js';
 import { dayTotals } from './nutrition.js';
+import { buildCalendarWeeks, WEEKDAY_LABELS, GYM_TARGET_PER_WEEK } from './calendarView.js';
+import { listPhotos } from './photos.js';
 import {
   estimateFfmKg,
   dailyExerciseKcal,
@@ -25,6 +27,7 @@ export function initRecordTab(s) {
 
 export function renderRecordTab() {
   const workouts = store.get('workouts');
+  const badminton = store.get('badminton');
   const weeks = weeklyVolume(workouts);
   const feasibility = weekFeasibility(workouts, todayStr());
   const game = store.get('game');
@@ -54,7 +57,7 @@ export function renderRecordTab() {
     </div>
     <div class="card">
       <h2 style="margin-top:0">カレンダー</h2>
-      ${renderCalendar(workouts, store.get('badminton'))}
+      <div id="calendarWrap">${renderCalendar(workouts, badminton, new Set())}</div>
     </div>
     <div class="card">
       <h2 style="margin-top:0">称号</h2>
@@ -72,6 +75,11 @@ export function renderRecordTab() {
   // addEventListener だと record タブに戻ってくるたびにハンドラが積み重なる。
   // onclick 代入で常に1つに保つ。
   $('#tab-record').onclick = onRecordTabClick;
+
+  // 写真の印だけは IndexedDB(js/photos.js)への非同期問い合わせが必要なので、
+  // 上の innerHTML 代入(同期部分。写真の印なしで一度描画済み)の後に埋め直す。
+  // カレンダー部分だけを再構築し、Chart.js の読み込み・canvas 描画には触れない。
+  fillCalendarPhotos(workouts, badminton);
 
   // Chart.js はここで初めて動的に読み込む(js/charts.js の loadChartJs 参照)。
   // カレンダー・称号・体組成の数値等、canvas を使わないカードは上の innerHTML 代入で
@@ -198,21 +206,94 @@ function weekSummary(weeks, feasibility) {
 }
 
 
-/** 直近8週間のカレンダー。ジムはバーベル・バドミントンはシャトルのアイコン、休養は中点 */
-function renderCalendar(workouts, badminton) {
-  const gymDates = new Set(workouts.map((w) => w.date));
-  const badDates = new Set(badminton.map((b) => b.date));
-  const cells = [];
-  const today = new Date(todayStr() + 'T00:00:00Z');
-  for (let i = 55; i >= 0; i--) {
-    const d = new Date(today);
-    d.setUTCDate(d.getUTCDate() - i);
-    const key = d.toISOString().slice(0, 10);
-    const mark = gymDates.has(key) ? icon('i-barbell', 'icon-sm') : badDates.has(key) ? icon('i-shuttle', 'icon-sm') : '·';
-    // data-date でタップ判定する(title属性はホバー用の補助表示として残す)。
-    // 44px未満だと誤タップ元になるため、幅は12.5%でも縦方向のpaddingで
-    // タップ領域を44px以上確保する。
-    cells.push(`<span title="${key}" data-date="${key}" style="display:inline-block;width:12.5%;text-align:center;padding:12px 0;cursor:pointer">${mark}</span>`);
+// 表示する週数。以前の実装も56日(=8週)分を一覧していたため、見せる履歴の長さは
+// 変えずに「曜日の列が揃う」よう週単位(月曜始まり)に切り上げる。ページング(先週より前に
+// 遡る)は今回は追加しない: 8週あれば直近2ヶ月の傾向は十分読み取れるし、ページングを足すと
+// 状態(表示中の週オフセット)を持つ必要が出て複雑になる。ユーザーからページングが要る
+// という声が出たら、そのとき素直に足せばよい。
+const CALENDAR_WEEKS = 8;
+
+/**
+ * 直近8週間(月曜始まり、weekKey/weekFeasibilityと同じ週の切り方)のカレンダー。
+ * 週の切り方・各セルの中身(program/バドミントン/写真の有無)・週次のジム回数は
+ * js/calendarView.js の buildCalendarWeeks に集約してある(単体テスト済み。このモジュール側は
+ * その戻り値をHTMLに描くだけ)。7列固定のグリッドに8列目として週次のジム回数
+ * (目標回数中、何回実施したか)を添える。
+ *
+ * ジムの日は「行った」ことだけでなくどのプログラム(A/B/C)かを文字バッジで示す
+ * (ユーザーが自分でプログラムを選ぶようになったため、汎用のバーベルアイコンより
+ * 情報量が多い)。バドミントン・写真はそれぞれのアイコンを添える。3つとも同日に
+ * 起こり得るため、印は排他ではなく並べて表示する。
+ *
+ * photoDates はIndexedDBへの非同期問い合わせ結果(js/photos.js の listPhotos)を
+ * 呼び出し側(fillCalendarPhotos)が渡す。初回描画時は空集合で(写真の印なしに)同期的に
+ * 描画し、写真件数が判明し次第 #calendarWrap だけを差し替える。
+ */
+function renderCalendar(workouts, badminton, photoDates) {
+  const { weeks } = buildCalendarWeeks({ workouts, badminton, photoDates, todayStr: todayStr(), weeks: CALENDAR_WEEKS });
+
+  const headerHtml = WEEKDAY_LABELS.map((l) => `<div class="cal-wd">${l}</div>`).join('')
+    + '<div class="cal-wd cal-wd-count">実施</div>';
+
+  const bodyHtml = weeks.map((week) => {
+    // その週の中に「月の1日」があれば、月境界のラベルをその週の直前に挟む。
+    // grid-column:1/-1 のブロックなので、8列グリッドの中で1行まるごと使う。
+    const firstOfMonth = week.days.find((d) => d.isFirstOfMonth);
+    const monthLabelHtml = firstOfMonth
+      ? `<div class="cal-month-label">${firstOfMonth.year}年${firstOfMonth.month}月</div>`
+      : '';
+    const daysHtml = week.days.map(renderCalCell).join('');
+    const achieved = week.gymCount >= GYM_TARGET_PER_WEEK;
+    const countHtml = `<div class="cal-count${achieved ? ' up' : ''}">${week.gymCount}/${GYM_TARGET_PER_WEEK}</div>`;
+    return `${monthLabelHtml}${daysHtml}${countHtml}`;
+  }).join('');
+
+  return `<div class="cal-grid">${headerHtml}${bodyHtml}</div>`;
+}
+
+function renderCalCell(day) {
+  // 月の1日だけは日付番号の代わりに「M/D」にして、月境界ラベルが無くても
+  // この1マスだけ見れば月が変わったことが分かるようにする(二重の手がかり)。
+  const label = day.isFirstOfMonth ? `${day.month}/${day.dayOfMonth}` : String(day.dayOfMonth);
+
+  if (day.isFuture) {
+    // 今週のうちまだ来ていない未来日。記録が存在しようがないので、休養日(中点)とは
+    // 明確に区別する: 印は何も出さず、セル全体を薄くしてタップもさせない
+    // (data-date を持たせない。js/dayView.js を開いても常に空の未来日になるだけで意味が無い)。
+    return `<div class="cal-cell future"><span class="cal-daynum">${esc(label)}</span><span class="cal-marks"></span></div>`;
   }
-  return `<div style="font-size:14px">${cells.join('')}</div>`;
+
+  const marks = [];
+  if (day.program === 'unknown') marks.push(icon('i-barbell', 'icon-sm'));
+  else if (day.program) marks.push(`<span class="cal-prog cal-prog-${esc(day.program)}">${esc(day.program)}</span>`);
+  if (day.hasBadminton) marks.push(icon('i-shuttle', 'icon-sm'));
+  if (day.hasPhoto) marks.push(icon('i-camera', 'icon-sm'));
+  const marksHtml = marks.length ? marks.join('') : '<span class="cal-dot">・</span>';
+
+  const cls = 'cal-cell' + (day.isToday ? ' today' : '');
+  // data-date でタップ判定する(js/recordTab.js の onRecordTabClick)。title属性はホバー用の
+  // 補助表示として残す。セルの最小サイズはCSS(.cal-cell)側でタップ領域を確保する。
+  return `<div class="${cls}" title="${esc(day.date)}" data-date="${esc(day.date)}">
+    <span class="cal-daynum">${esc(label)}</span><span class="cal-marks">${marksHtml}</span></div>`;
+}
+
+/**
+ * カレンダーの写真マークだけを後埋めする。IndexedDB(js/photos.js)への問い合わせは
+ * 非同期なので、renderRecordTab 本体の同期的な innerHTML 代入では待たない
+ * (js/settingsTab.js の fillStorageStatus と同じ考え方)。IndexedDBが使えない環境・
+ * listPhotos が失敗した場合も、写真の印が無いカレンダーのまま(例外を投げない)。
+ * ユーザーがこの後すぐ別タブへ切り替えても(#calendarWrapがnullを返すだけで)クラッシュしない。
+ */
+async function fillCalendarPhotos(workouts, badminton) {
+  let photoDates;
+  try {
+    const photos = await listPhotos();
+    photoDates = new Set(photos.map((p) => p?.date).filter((d) => typeof d === 'string'));
+  } catch (err) {
+    console.warn('写真の読み込みに失敗しました(カレンダーの写真マークは表示されません):', err);
+    return;
+  }
+  const wrap = $('#calendarWrap');
+  if (!wrap) return;
+  wrap.innerHTML = renderCalendar(workouts, badminton, photoDates);
 }

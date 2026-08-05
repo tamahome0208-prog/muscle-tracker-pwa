@@ -140,8 +140,9 @@ button:active { transform: scale(.97); }
    上にうっすら罫線を引いて「ここで区切れる」ことを視覚的にも示す。 */
 .cal-month-label { grid-column: 1 / -1; font-size: 12px; color: var(--muted); font-weight: 600;
   padding: 8px 2px 2px; margin-top: 4px; border-top: 1px solid var(--line); }
+/* min-height 48px: タップ領域48px以上を確保する規約に合わせる(このセル自体がタップ対象) */
 .cal-cell { display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 2px; min-height: 46px; border: 1px solid var(--line); cursor: pointer; }
+  gap: 2px; min-height: 48px; border: 1px solid var(--line); cursor: pointer; }
 /* 今日のマス。太字＋アクセント色の枠で他の日と混同しないようにする */
 .cal-cell.today { border: 2px solid var(--accent); font-weight: 700; }
 /* 表示範囲外(今週のうちまだ来ていない未来日)。記録が存在しようがないので、
@@ -159,7 +160,7 @@ button:active { transform: scale(.97); }
   background: var(--accent); color: var(--on-accent); font-weight: 800; font-size: 9px; line-height: 1; }
 /* 週次のジム実施回数(例: 3/3)。週3回の目標に達していれば --ok(緑)で強調する
    (ホームタブの今週の達成状況と同じ .up クラスを流用)。 */
-.cal-count { display: flex; align-items: center; justify-content: center; min-height: 46px;
+.cal-count { display: flex; align-items: center; justify-content: center; min-height: 48px;
   border: 1px solid var(--line); border-left: none; font-weight: 700; font-variant-numeric: tabular-nums;
   padding: 0 2px; }
 

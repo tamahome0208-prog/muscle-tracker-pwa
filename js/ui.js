@@ -20,6 +20,7 @@ export function icon(name, cls = '') {
 
 const TABS = ['home', 'workout', 'meal', 'photo', 'record', 'settings'];
 const listeners = {};
+let activeTab = null;
 
 /** タブ表示時に呼ぶ描画関数を登録する */
 export function onShow(tab, fn) {
@@ -31,7 +32,66 @@ export function showTab(tab) {
     $(`#tab-${t}`).classList.toggle('hidden', t !== tab);
     document.querySelector(`#tabbar button[data-tab="${t}"]`).classList.toggle('active', t === tab);
   }
+  activeTab = tab;
   listeners[tab]?.();
+}
+
+/**
+ * 今表示しているタブを描き直す。
+ * js/main.js の boot() が initTabs() を先に呼んでから種データの取得を待つように
+ * なったため(不安定な回線で fetch がハングしてもタブが操作可能であることを
+ * 優先する)、取得完了後に画面へ反映するための再描画口が必要になった。
+ * まだ initTabs() が呼ばれていなければ何もしない。
+ */
+export function refreshCurrentTab() {
+  if (activeTab) listeners[activeTab]?.();
+}
+
+/**
+ * これから外部(Google)へ送る画像を実際に表示し、送ってよいかを確認する。
+ *
+ * 【なぜ必要か】食事写真・レシート・InBody結果紙はいずれも
+ * <input type="file" accept="image/*" capture="environment"> から選ぶ。
+ * capture はヒントに過ぎず、Androidではギャラリー選択に切り替えられる。
+ * つまり利用者が誤って体の進捗写真を選ぶ経路が実在する。
+ * 以前の確認は解析「結果の数値」しか見せておらず、その時点で送信は終わっていた。
+ * 送る前に、何を送るのかを本人が目で見て確認できなければならない。
+ *
+ * confirm() ではなく自前のダイアログにしているのは、画像そのものを見せる必要が
+ * あるため(ブラウザ標準ダイアログには画像を入れられない)。
+ * 表示用の ObjectURL は、どの分岐で閉じても必ず revoke する。
+ *
+ * kindLabel: 送るものの名前(例: 'インボディの結果紙')。何を確認すべきかを示す。
+ * 戻り値: 送ってよければ true。
+ */
+export function confirmSend(file, kindLabel) {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const host = activeTab ? $(`#tab-${activeTab}`) : document.body;
+    const dialog = document.createElement('div');
+    dialog.className = 'card';
+    dialog.id = 'sendConfirm';
+    dialog.innerHTML = `
+      <h2 style="margin-top:0">この画像をGoogleに送信します</h2>
+      <img src="${url}" alt="送信する画像" style="max-width:100%;border-radius:8px;display:block">
+      <p class="muted">${esc(kindLabel)}であることを確認してください。
+        解析のためGoogle(Gemini API)へ送信されます。送信するのはこの1枚だけです。
+        撮影タブの体の進捗写真や、保存済みのトレーニング記録・体重の履歴データは送信されません。</p>
+      <div class="chips">
+        <button id="btnSendOk" class="primary">送信する</button>
+        <button id="btnSendCancel">やめる</button>
+      </div>`;
+    host.prepend(dialog);
+    dialog.scrollIntoView({ block: 'center' });
+
+    const close = (ok) => {
+      URL.revokeObjectURL(url);
+      dialog.remove();
+      resolve(ok);
+    };
+    dialog.querySelector('#btnSendOk').addEventListener('click', () => close(true));
+    dialog.querySelector('#btnSendCancel').addEventListener('click', () => close(false));
+  });
 }
 
 export function initTabs() {

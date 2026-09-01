@@ -1,6 +1,14 @@
+// このファイルのテストが「何を保証しているか」の記録。
+// 下の MUTATION 行は、実装を意図的にその形へ壊したときに落ちるテストの件数である。
+// テストが通ることは、そのテストが何かを保証している証拠にはならない。
+// 保証しているかどうかは、壊して落ちることでしか確かめられない(docs/SPEC.md §5.2)。
+// 実装を変えたら、この記録も実際に壊して数え直すこと。
+// MUTATION: js/nutrition.js:belowFloor 常にfalseにする => 期待失敗 8件
+// MUTATION: js/nutrition.js:kcalOver フロア未満でも上限超過を出す => 期待失敗 1件
+// MUTATION: js/nutrition.js:DEFAULT_DAY_OVER_HOUR 22->20 => 期待失敗 2件
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { dayTotals, achievement, sortFoodsByUse, bumpFoodUse } from '../js/nutrition.js';
+import { dayTotals, achievement, sortFoodsByUse, bumpFoodUse, isDayOver, DEFAULT_DAY_OVER_HOUR, daysSinceLastMealLog, MEAL_LOG_GAP_DAYS } from '../js/nutrition.js';
 import { estimateFfmKg } from '../js/energy.js';
 
 const TARGETS = { protein: 100, kcalMin: 1700, kcalMax: 1800, kcalFloor: 1500, alcoholMl: 500 };
@@ -254,8 +262,93 @@ test('targetsの分母が0または非有限なら達成率は0%として扱う�
   const a1 = achievement({ kcal: 1750, protein: 100, alcoholMl: 0 }, { ...TARGETS, protein: 0 });
   assert.equal(a1.proteinPct, 0);
 
+  // kcalMin=0 は「バーの分母を0にして達成率表示を無効化する」抜け道だった。
+  // 現在、達成率の分母は max(kcalMin, フロア) なので、kcalMin を0にしても
+  // 警告ライン(kcalFloor=1500)基準で評価され続ける。Infinity/NaN も出ない。
   const a2 = achievement({ kcal: 1750, protein: 100, alcoholMl: 0 }, { ...TARGETS, kcalMin: 0 });
-  assert.equal(a2.kcalPct, 0);
+  assert.equal(a2.kcalPct, 100);
+  assert.ok(Number.isFinite(a2.kcalPct));
+
+  // 分母になりうる値が全て0/非有限のときだけ、割り算を行わず0%へフォールバックする。
+  const a3 = achievement({ kcal: 1750, protein: 100, alcoholMl: 0 }, { ...TARGETS, kcalMin: 0, kcalFloor: 0 });
+  assert.equal(a3.kcalPct, 0);
+});
+
+// --- 【安全装置】下限判定が上限超過の判定に潰されないこと ---
+// これらは「kcalMax を下げるだけで下限警告を到達不能にできた」欠陥に対する回帰テスト。
+// 実装の分岐を排他(if/else if)に戻すと必ず落ちる。
+
+test('achievement: kcalMaxを下限より低く設定しても、下限割れのdanger警告は出る', () => {
+  // 利用者が上限を1,000kcalに下げた状態で1,100kcal摂取。EAフロアは30*48+184=1,624kcal。
+  // 以前は「上限超過(info)」が成立した時点で下限判定に到達せず、
+  // 食べなさすぎの日に「目標を100kcal超えています」とだけ表示されていた。
+  const a = achievement(
+    { kcal: 1100, protein: 100, alcoholMl: 0 },
+    { ...TARGETS, kcalMin: 1000, kcalMax: 1000 },
+    { dayOver: true, ffmKg: 48, exerciseKcal: 184 }
+  );
+  const floorWarning = a.warnings.find((w) => w.type === 'kcalFloor');
+  assert.ok(floorWarning, 'EAフロアを下回っているので kcalFloor 警告が出なければならない');
+  assert.equal(floorWarning.level, 'danger');
+});
+
+test('achievement: フロアを下回っている間は上限超過(kcalOver)を出さない', () => {
+  // EAフロア未満の状態で「目標を超えています」と伝えるのは、摂取を減らす方向へ
+  // 誘導することになり、このアプリの目的と正面から反する。
+  const a = achievement(
+    { kcal: 1100, protein: 100, alcoholMl: 0 },
+    { ...TARGETS, kcalMin: 1000, kcalMax: 1000 },
+    { dayOver: true, ffmKg: 48, exerciseKcal: 184 }
+  );
+  assert.equal(a.warnings.find((w) => w.type === 'kcalOver'), undefined);
+});
+
+test('achievement: フロアより上で上限を超えていれば、従来どおりkcalOver(info)を出す', () => {
+  const a = achievement(
+    { kcal: 1900, protein: 100, alcoholMl: 0 },
+    TARGETS,
+    { dayOver: true, ffmKg: 48, exerciseKcal: 184 }
+  );
+  const over = a.warnings.find((w) => w.type === 'kcalOver');
+  assert.ok(over, '1,900kcal は EAフロア1,624 より上で上限1,800を超えている');
+  assert.equal(over.level, 'info');
+  assert.equal(a.warnings.find((w) => w.type === 'kcalFloor'), undefined);
+});
+
+test('achievement: 「残りkcal」のアンカーはkcalMinではなくEAフロアの方が大きければEAフロア', () => {
+  // kcalMin=1000 のまま kcalMin を分母にすると、900kcal時点で「残り100kcal」=
+  // もうすぐ終わり、という誤った安心を与える。実際のEAフロアは1,624kcal。
+  const a = achievement(
+    { kcal: 900, protein: 100, alcoholMl: 0 },
+    { ...TARGETS, kcalMin: 1000, kcalMax: 1000 },
+    { dayOver: false, ffmKg: 48, exerciseKcal: 184 }
+  );
+  const remaining = a.warnings.find((w) => w.type === 'kcalRemaining');
+  assert.ok(remaining);
+  assert.match(remaining.message, /残り 724kcal/); // 1624 - 900
+});
+
+// --- isDayOver（「その日の食事は終わった」とみなす時刻） ---
+
+test('isDayOver: 既定の閾値は22時（朝プロテイン+夕食1食の生活で20時は夕食前に誤爆する）', () => {
+  assert.equal(DEFAULT_DAY_OVER_HOUR, 22);
+  assert.equal(isDayOver(20), false);
+  assert.equal(isDayOver(21), false);
+  assert.equal(isDayOver(22), true);
+  assert.equal(isDayOver(23), true);
+});
+
+test('isDayOver: 利用者が閾値を指定できる', () => {
+  assert.equal(isDayOver(20, 20), true);
+  assert.equal(isDayOver(19, 20), false);
+  assert.equal(isDayOver(0, 0), true);
+});
+
+test('isDayOver: 閾値が不正（範囲外・非数値・未指定）なら既定値へフォールバックする', () => {
+  for (const bad of [undefined, null, NaN, -1, 24, 99, 'abc', {}]) {
+    assert.equal(isDayOver(21, bad), false, `${String(bad)} は既定22時にフォールバックすべき`);
+    assert.equal(isDayOver(22, bad), true, `${String(bad)} は既定22時にフォールバックすべき`);
+  }
 });
 
 // --- achievement() のEA(エネルギー可用性)フロア連動(js/energy.js の eaFloorKcal) ---
@@ -312,4 +405,75 @@ test('achievement: InBody記録が無くても(profile.weightからの概算FFM�
   assert.ok(w, 'InBody記録が無くても運動消費を反映したEAフロアで警告が出るはず(以前は無警告になっていた回帰)');
   assert.equal(w.level, 'danger');
   assert.match(w.message, /1572/);
+});
+
+// --- 【安全装置】運動消費が不明なとき、下限判定を保留すること ---
+
+test('achievement: exerciseKcal が null（体重未記録）なら下限判定を行わず eaUnavailable を返す', () => {
+  // 摂取1,100kcal は固定の kcalFloor(1500) を下回るが、運動消費が不明なので
+  // 「1500を基準に判定する」ことはできない。フロアを固定値へ緩めて
+  // 「1500未満だから警告」と出すのも、逆に「運動0だから足りている」と
+  // 判断するのも、どちらも根拠が無い。判定そのものを保留する。
+  const a = achievement(
+    { kcal: 1100, protein: 100, alcoholMl: 0 },
+    TARGETS,
+    { dayOver: true, ffmKg: 48, exerciseKcal: null }
+  );
+  assert.equal(a.warnings.find((w) => w.type === 'kcalFloor'), undefined, '下限判定は行わない');
+  const unavailable = a.warnings.find((w) => w.type === 'eaUnavailable');
+  assert.ok(unavailable, 'eaUnavailable 警告を1件返すこと');
+  assert.equal(unavailable.level, 'warn');
+});
+
+test('achievement: exerciseKcal を省略した場合は従来どおり 0 として扱う（後方互換）', () => {
+  const a = achievement({ kcal: 1100, protein: 100, alcoholMl: 0 }, TARGETS, { dayOver: true, ffmKg: 48 });
+  // EAフロア = 30*48 + 0 = 1440。1,100 はこれを下回るので danger が出る。
+  const floor = a.warnings.find((w) => w.type === 'kcalFloor');
+  assert.ok(floor, '省略時は運動0として計算し、下限判定は行う');
+  assert.equal(a.warnings.find((w) => w.type === 'eaUnavailable'), undefined);
+});
+
+test('achievement: 運動消費が不明でもタンパク質の警告は従来どおり出る', () => {
+  const a = achievement(
+    { kcal: 1100, protein: 40, alcoholMl: 0 },
+    TARGETS,
+    { dayOver: true, ffmKg: 48, exerciseKcal: null }
+  );
+  assert.ok(a.warnings.find((w) => w.type === 'proteinShort'), '下限判定の保留は他の警告を止めない');
+});
+
+// --- 記録の途切れ検知（R3.7.1） ---
+// 【なぜ要るか】achievement() は kcal === 0（まだ何も記録していない日）を
+// danger の対象にしない。意図は妥当だが、帰結として「食事を記録しなくなれば
+// EA関連の警告は全て消える」。極端な減量志向の再発は、まさに記録が途切れる
+// 形で現れる。「食べていないから記録しない」と「記録していないから警告が
+// 出ない」が同じ状態になってはならない。
+
+test('daysSinceLastMealLog: 最後に食事を記録した日からの日数を返す', () => {
+  const meals = [
+    { id: 'a', datetime: '2026-08-10T19:00', items: [] },
+    { id: 'b', datetime: '2026-08-16T19:00', items: [] }
+  ];
+  assert.equal(daysSinceLastMealLog(meals, '2026-08-19'), 3);
+  assert.equal(daysSinceLastMealLog(meals, '2026-08-16'), 0);
+});
+
+test('daysSinceLastMealLog: 記録が1件も無ければ null', () => {
+  assert.equal(daysSinceLastMealLog([], '2026-08-19'), null);
+  assert.equal(daysSinceLastMealLog(null, '2026-08-19'), null);
+});
+
+test('daysSinceLastMealLog: 壊れたレコード・未来日付を読み飛ばす', () => {
+  const meals = [
+    null,
+    { id: 'no-dt', items: [] },
+    { id: 'bad', datetime: 'いつか', items: [] },
+    { id: 'future', datetime: '2099-01-01T19:00', items: [] },
+    { id: 'ok', datetime: '2026-08-17T19:00', items: [] }
+  ];
+  assert.equal(daysSinceLastMealLog(meals, '2026-08-19'), 2);
+});
+
+test('MEAL_LOG_GAP_DAYS は3日。これを超えたら記録が途切れているとみなす', () => {
+  assert.equal(MEAL_LOG_GAP_DAYS, 3);
 });

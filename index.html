@@ -2,6 +2,30 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8">
+<!--
+  Content-Security-Policy: 送信先をブラウザレベルで制限する。
+
+  【なぜ必要か】「体の進捗写真は端末外に出ない」という保証を、これまでは
+  「js/photos.js と js/photoTab.js に fetch 等が書かれていないこと」で説明していた。
+  しかしこの grep は js/homeTab.js に対しても0件を返す。にもかかわらず homeTab.js は
+  import { analyzeInbody } from './ocr.js' 経由でGoogleに画像を送っている。
+  つまりファイル単位の grep は送信経路の不在を証明しない。import を1行足せば
+  grep は0件のまま送信可能になる。
+  connect-src で許可先を列挙すれば、どのファイルがどう import しようと、
+  ここに書かれていない宛先へは送れない。人間の約束ではなく機械的な強制になる。
+
+  各ディレクティブの理由:
+  - connect-src: 送信先は Gemini(食事写真・レシート・InBody結果紙のOCR)と
+    Open Food Facts(JANコード照会)の2つだけ。'self' は data/*.json の取得用。
+  - script-src 'self': js/charts.js が vendor/chart.umd.js を動的に <script> 注入する。
+    同一オリジンなので 'self' で足りる。インラインスクリプトは0件なので許可しない。
+  - style-src に 'unsafe-inline' が必要なのは style="..." 属性を91箇所で使っているため。
+    これを外すには全てクラスへ移す必要がある(未実施・要求として起票済み)。
+  - img-src の blob:/data: は IndexedDB から復元した体の写真とキャンバス出力の表示用。
+  - media-src blob: はカメラプレビュー用。
+  - object-src 'none' / base-uri 'self' / form-action 'none' は既定の締め。
+-->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https://generativelanguage.googleapis.com https://world.openfoodfacts.org; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self' blob:; font-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0d0d0f">
 <title>筋トレ管理</title>
@@ -79,6 +103,16 @@
   <symbol id="i-check" viewBox="0 0 24 24">
     <path fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round" d="m4.8 12.6 4.8 4.8 9.6-10.4"/>
   </symbol>
+  <symbol id="i-rotate" viewBox="0 0 24 24">
+    <path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" d="M20 12a8 8 0 1 1-2.6-5.9"/>
+    <path fill="currentColor" d="M20.8 3.2v5.4h-5.4Z"/>
+  </symbol>
+  <symbol id="i-back" viewBox="0 0 24 24">
+    <path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" d="M20 12H5m0 0 6.4-6.4M5 12l6.4 6.4"/>
+  </symbol>
+  <symbol id="i-up" viewBox="0 0 24 24">
+    <path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" d="M6.5 17.5 17 7m0 0h-7.4M17 7v7.4"/>
+  </symbol>
 
   <symbol id="torso-base" viewBox="0 0 40 56">
     <path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" opacity=".38"
@@ -112,13 +146,14 @@
   <div class="bar"><span class="bar-label">カロリー</span>
     <div class="track"><div class="fill" id="kcalFill"></div></div>
     <span class="bar-value" id="kcalValue">0 / 1750</span></div>
-  <div class="bar"><span class="bar-label">純アルコール</span>
-    <div class="track"><div class="fill" id="alcoholFill"></div></div>
-    <span class="bar-value" id="alcoholValue">0g（0ml）</span></div>
-  <!-- 脂質・炭水化物は「死守2項目」(タンパク質・カロリー)と同じ太さのバーにしない。
-       このタブは筋トレの合間に見る画面で、本当に管理する数値は2つだけという設計を
-       薄めないため、進捗バー無しの小さな数値行にとどめる(js/mealTab.js 参照)。 -->
+  <!-- 進捗バーを持つのは死守2項目(タンパク質・カロリー)だけ。
+       純アルコールは以前ここに3本目のバーを持っていたが、同じ太さのバーは
+       「同じ格の管理項目」という意味になる。このアプリが守りたいのは
+       タンパク質とカロリーの2つで、飲酒量はそれと同格ではない。
+       脂質・炭水化物と同じ、進捗バー無しの小さな数値行へ降格する
+       (js/mealTab.js の renderStatusBar / renderMacroSecondary 参照)。 -->
   <div class="macro-secondary" id="macroSecondary"></div>
+  <div class="macro-secondary" id="alcoholSecondary"></div>
   <div id="warnings"></div>
 </header>
 

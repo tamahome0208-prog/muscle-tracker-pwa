@@ -1,12 +1,14 @@
-import { $, onShow, showTab, toast, todayStr, esc, icon } from './ui.js';
+import { $, onShow, showTab, toast, todayStr, esc, icon, confirmSend } from './ui.js';
 import {
   nextProgram, weeklyVolume, warnsBadmintonAfterLegs, weekKey, previousWeekKey,
   weekFeasibility, daysUntilDetraining
 } from './workout.js';
 import { calcStreak, isInitialPhase, initialPhaseStatus, levelFromXp, PART_LABELS, PARTS } from './game.js';
-import { sortFoodsByUse } from './nutrition.js';
+import { sortFoodsByUse, dayTotals, isDayOver, daysSinceLastMealLog, MEAL_LOG_GAP_DAYS } from './nutrition.js';
 import { addFoodById } from './mealTab.js';
-import { latestBody } from './body.js';
+import { latestBody, currentBodyweight, bodyweightAsOf } from './body.js';
+import { estimateFfmKg, dailyExerciseKcal, energyAvailability } from './energy.js';
+import { EA_EMERGENCY_PER_KG_FFM } from './goals.js';
 import { analyzeInbody, OcrError } from './ocr.js';
 import { shouldShowBackupReminder } from './backupReminder.js';
 
@@ -36,7 +38,9 @@ export function renderHomeTab() {
   const today = todayStr();
   const program = nextProgram(workouts);
   const streak = calcStreak(workouts, today);
-  const weeks = weeklyVolume(workouts);
+  // volume がスタンプされていない古いレコードでも自重・アシスト種目を正しく数えるため、
+  // その日時点の体重と種目マスタを渡す(js/workout.js の weeklyVolume 参照)。
+  const weeks = weeklyVolume(workouts, (w) => ({ exercises: store.get('exercises'), bodyweight: bodyweightAsOf(store.get('body'), w.date, store.get('profile')) }));
   const initial = isInitialPhase(profile.startDate, today);
   const status = initialPhaseStatus(workouts, meals, today);
   const feasibility = weekFeasibility(workouts, today);
@@ -48,6 +52,7 @@ export function renderHomeTab() {
   // この判定には含めない(js/settingsTab.js の「データの状態」カードでは別途表示する)。
   const recordCount = workouts.length + meals.length + bodyRecords.length + badminton.length;
   const showBackupReminder = shouldShowBackupReminder(recordCount, settings, today);
+  const safety = renderSafetyCard(profile, meals, bodyRecords, workouts, badminton, today);
 
   $('#tab-home').innerHTML = `
     <div class="card card-primary">
@@ -55,6 +60,8 @@ export function renderHomeTab() {
       <div class="big">【${program}】${PROGRAM_NAMES[program]}</div>
       <button id="btnGoWorkout" class="primary" style="margin-top:8px;width:100%">トレーニングを始める</button>
     </div>
+
+    ${safety}
 
     ${showBackupReminder ? renderBackupReminderCard() : ''}
 
@@ -103,6 +110,9 @@ export function renderHomeTab() {
     </div>`;
 
   $('#btnGoWorkout').addEventListener('click', () => showTab('workout'));
+  // 安全カードは条件を満たしたときだけ描画されるので、要素の有無を確認してから繋ぐ。
+  // 警告を出すだけで次の行動への導線が無ければ、読んでも何もできない。
+  document.querySelector('#btnGoMeal')?.addEventListener('click', () => showTab('meal'));
   if (showBackupReminder) {
     $('#btnGoBackup').addEventListener('click', () => showTab('settings'));
     $('#btnDismissBackup').addEventListener('click', () => {
@@ -123,6 +133,53 @@ export function renderHomeTab() {
   });
   $('#btnBadminton').addEventListener('click', recordBadminton);
   $('#btnInbody').addEventListener('click', recordBody);
+}
+
+/**
+ * ホームに出す安全カード。出すのは2つの場合だけで、どちらでもなければ何も描かない
+ * (常設すると壁紙化して、本当に出たときに読まれなくなる)。
+ *
+ * 1. 食事記録が MEAL_LOG_GAP_DAYS 日を超えて途切れている
+ *    → js/nutrition.js の achievement() は kcal===0 を警告対象にしないため、
+ *      記録が止まると安全警告も一緒に止まる。沈黙を「問題なし」と読ませない。
+ *
+ * 2. エネルギー可用性(EA)が緊急域(25 kcal/kg FFM/日 未満)
+ *    → この判定(js/goals.js の checkRateSignals)は記録タブの目標カードにしか
+ *      無かった。このアプリで最も強い警告が、月に数回しか開かないタブの下の方に
+ *      あるだけでは、警告として機能しない。
+ *      日中は必ず低く出るため、achievement() と同じ dayOver ゲートを通す
+ *      (2つの安全装置が別々の時刻ポリシーを持ってはならない)。
+ */
+function renderSafetyCard(profile, meals, bodyRecords, workouts, badminton, today) {
+  const notes = [];
+
+  const gap = daysSinceLastMealLog(meals, today);
+  if (gap !== null && gap > MEAL_LOG_GAP_DAYS) {
+    notes.push(`<p>食事の記録が<strong>${gap}日</strong>途切れています。記録が無い間は、摂取量が下限を割っていても警告が出ません。</p>`);
+  }
+
+  const weightForExercise = currentBodyweight(bodyRecords, profile);
+  const ffmResult = estimateFfmKg(latestBody(bodyRecords), weightForExercise);
+  const ffmKg = ffmResult ? ffmResult.ffmKg : null;
+  const exerciseKcal = dailyExerciseKcal(workouts, badminton, today, weightForExercise);
+  const dayOver = isDayOver(new Date().getHours(), profile.dayOverHour);
+  const totals = dayTotals(meals, today);
+  const ea = dayOver && totals.kcal > 0 && ffmKg !== null
+    ? energyAvailability(totals.kcal, exerciseKcal, ffmKg)
+    : null;
+  if (ea !== null && ea < EA_EMERGENCY_PER_KG_FFM) {
+    notes.push(
+      `<p>今日のエネルギー可用性は <strong>${ea.toFixed(1)} kcal/kg FFM/日</strong> で、`
+      + `緊急域(${EA_EMERGENCY_PER_KG_FFM}未満)です。この水準が続くと筋肉が分解され、目的と逆方向に進みます。</p>`
+    );
+  }
+
+  if (notes.length === 0) return '';
+  return `
+    <div class="card">
+      <div class="warn danger">${notes.join('')}</div>
+      <button id="btnGoMeal" class="primary" style="margin-top:8px;width:100%">食事を記録する</button>
+    </div>`;
 }
 
 /**
@@ -228,8 +285,20 @@ function weekDiff(weeks, feasibility) {
   const prev = weeks[weeks.length - 2];
   if (prev.week !== previousWeekKey(last.week)) return '';
   const diff = Math.round(last.volume - prev.volume);
-  return diff >= 0 ? `<span class="up">先週比 +${diff}kg ↗</span>` : `先週比 ${diff}kg`;
+  return diff >= 0 ? `<span class="up">先週比 +${diff}kg ${icon('i-up')}</span>` : `先週比 ${diff}kg`;
 }
+
+/**
+ * バドミントンの練習時間の選択肢（分）。
+ * このユーザーの練習は週2回・1時間なので60分を中央に置く。
+ *
+ * 【なぜ prompt() をやめて選択式にしたか】以前は prompt('何分やりましたか？', '60')
+ * だった。ブラウザ標準ダイアログはボタン寸法をアプリが制御できず、汗ばんだ手で
+ * 立ったまま数字を打つ必要があった。practically は毎回60を確定するだけの操作で、
+ * 入力の自由度に見合う価値が無い。1タップで終わる選択式にする。
+ * ここに無い時間を記録したい場合は、記録タブの日付ビューから編集する。
+ */
+const BADMINTON_MINUTES = [30, 60, 90, 120];
 
 /** 脚の日の翌日は回復が間に合わないため警告を出す */
 function recordBadminton() {
@@ -237,16 +306,37 @@ function recordBadminton() {
   if (warnsBadmintonAfterLegs(store.get('workouts'), today)) {
     if (!confirm('昨日は脚の日（C）でした。回復が間に合わない可能性があります。それでも記録しますか？')) return;
   }
-  const minutes = Number(prompt('何分やりましたか？', '60'));
-  if (!minutes || Number.isNaN(minutes)) return;
-  try {
-    store.set('badminton', [...store.get('badminton'), { date: today, durationMin: minutes }]);
-  } catch {
-    toast('保存できませんでした（端末の空き容量を確認してください）');
-    return;
-  }
-  toast('バドミントンを記録しました');
-  renderHomeTab();
+
+  const dialog = document.createElement('div');
+  dialog.className = 'card';
+  dialog.innerHTML = `
+    <h2 style="margin-top:0">バドミントンを記録</h2>
+    <p class="muted">今日は何分やりましたか？</p>
+    <div class="chips">
+      ${BADMINTON_MINUTES.map((m) => `<button data-min="${m}">${m}分</button>`).join('')}
+    </div>
+    <button id="btnCancelBadminton" style="margin-top:8px;width:100%">やめる</button>`;
+  $('#tab-home').prepend(dialog);
+  dialog.scrollIntoView({ block: 'center' });
+
+  dialog.addEventListener('click', (e) => {
+    if (e.target.closest('#btnCancelBadminton')) {
+      dialog.remove();
+      return;
+    }
+    const btn = e.target.closest('[data-min]');
+    if (!btn) return;
+    const minutes = Number(btn.dataset.min);
+    dialog.remove();
+    try {
+      store.set('badminton', [...store.get('badminton'), { date: today, durationMin: minutes }]);
+    } catch {
+      toast('保存できませんでした（端末の空き容量を確認してください）');
+      return;
+    }
+    toast(`バドミントン ${minutes}分を記録しました`);
+    renderHomeTab();
+  });
 }
 
 /**
@@ -301,6 +391,14 @@ function readInbodyPhoto() {
     input.addEventListener('change', async () => {
       const file = input.files?.[0];
       if (!file) return resolve(null);
+      // 【送信前に何を送るか見せる】
+      // この input は capture="environment" を付けているが、capture はヒントに
+      // 過ぎず、Androidではギャラリー選択に切り替えられる。つまり利用者が誤って
+      // 体の進捗写真を選ぶ経路が実在する。選んだ画像をGoogleに送る前に、
+      // それが何なのかを本人が目で見て確認できなければならない。
+      // 以前の確認ダイアログは解析「結果の数値」しか見せておらず、
+      // そのときには既に送信が終わっていた。
+      if (!(await confirmSend(file, 'インボディの結果紙'))) return resolve(null);
       toast('解析中...');
       try {
         const v = await analyzeInbody(file, store.get('settings').geminiKey);

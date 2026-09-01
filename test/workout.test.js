@@ -1,3 +1,10 @@
+// このファイルのテストが「何を保証しているか」の記録。
+// 下の MUTATION 行は、実装を意図的にその形へ壊したときに落ちるテストの件数である。
+// テストが通ることは、そのテストが何かを保証している証拠にはならない。
+// 保証しているかどうかは、壊して落ちることでしか確かめられない(docs/SPEC.md §5.2)。
+// 実装を変えたら、この記録も実際に壊して数え直すこと。
+// MUTATION: js/workout.js:weeklyVolume の contextFor を無視する => 期待失敗 2件
+// MUTATION: js/workout.js:calcVolume の assist クランプを外す => 期待失敗 2件
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -18,6 +25,7 @@ import {
   migrateHistoricalVolume,
   PROGRAMS
 } from '../js/workout.js';
+import { bodyweightAsOf } from '../js/body.js';
 
 test('記録が無ければ最初はA', () => {
   assert.equal(nextProgram([]), 'A');
@@ -722,4 +730,101 @@ test('migrateHistoricalVolume: external種目は体重を加味しないので�
   ];
   const migrated = migrateHistoricalVolume(workouts, exercises, [], { weight: 60 });
   assert.equal(migrated[0].volume, 300);
+});
+
+// --- weeklyVolume のフォールバックが context を落としていた（R1.2.3） ---
+// w.volume ?? calcVolume(w.sets ?? []) は context 無しで呼んでおり、
+// calcVolume は context 省略時に全種目を 'external'（外部重量）として扱う。
+// つまり volume がスタンプされていないレコード（古いバックアップ・手編集JSON・
+// インポート経由）は、自重種目・アシスト種目のボリュームが丸ごと0として集計される。
+
+test('weeklyVolume: volume未スタンプでも context を渡せば自重種目を正しく集計する', () => {
+  const exercises = [
+    { id: 'chin', name: 'チンニング', load: 'bodyweight', loadFactor: 1 },
+    { id: 'assist', name: 'アシストチンニング', load: 'assist', loadFactor: 1 }
+  ];
+  const workouts = [
+    // volume を持たない（＝移行をすり抜けた）レコード
+    { id: 'w1', date: '2026-08-19', sets: [{ exId: 'chin', weight: 0, reps: 10 }] }
+  ];
+  const withContext = weeklyVolume(workouts, () => ({ exercises, bodyweight: 60 }));
+  assert.equal(withContext[0].volume, 600, '体重60kg × 10回 = 600 になるべき');
+
+  // context を渡さなければ従来どおり0（後方互換。呼び出し側が渡していない箇所を壊さない）
+  const withoutContext = weeklyVolume(workouts);
+  assert.equal(withoutContext[0].volume, 0);
+});
+
+test('weeklyVolume: contextFor はワークアウトごとに呼ばれ、その日の体重を渡せる', () => {
+  const exercises = [{ id: 'chin', name: 'チンニング', load: 'bodyweight', loadFactor: 1 }];
+  const workouts = [
+    { id: 'w1', date: '2026-08-03', sets: [{ exId: 'chin', weight: 0, reps: 10 }] },
+    { id: 'w2', date: '2026-08-10', sets: [{ exId: 'chin', weight: 0, reps: 10 }] }
+  ];
+  const seen = [];
+  const weeks = weeklyVolume(workouts, (w) => {
+    seen.push(w.date);
+    return { exercises, bodyweight: w.date === '2026-08-03' ? 60 : 62 };
+  });
+  assert.deepEqual(seen, ['2026-08-03', '2026-08-10']);
+  assert.equal(weeks.find((x) => x.week === weekKey('2026-08-03')).volume, 600);
+  assert.equal(weeks.find((x) => x.week === weekKey('2026-08-10')).volume, 620);
+});
+
+test('weeklyVolume: volume がスタンプ済みなら contextFor は使わない（再計算しない）', () => {
+  const workouts = [{ id: 'w1', date: '2026-08-19', sets: [{ exId: 'chin', weight: 0, reps: 10 }], volume: 12345 }];
+  let called = false;
+  const weeks = weeklyVolume(workouts, () => { called = true; return { exercises: [], bodyweight: 60 }; });
+  assert.equal(weeks[0].volume, 12345);
+  assert.equal(called, false, 'スタンプ済みの過去の値を今の体重で上書きしてはならない');
+});
+
+// --- 【R1.2.4】新規保存と移行済みデータで基準体重が一致すること ---
+// js/workoutTab.js の finishSession は、以前 currentBodyweight(今の体重)を使って
+// volume を計算していた。一方 migrateHistoricalVolume は bodyweightAsOf(その日の体重)。
+// 日付ビューから過去日の記録を入れると、新規保存と移行済みデータで基準が食い違う
+// (3ヶ月前のチンニングが今の体重で計算される)。両方 bodyweightAsOf に揃えた。
+//
+// workoutTab.js は DOM に触れるため直接テストできないので、
+// 「同じ入力を bodyweightAsOf で計算したものと migrateHistoricalVolume の結果が
+// 一致すること」を固定して、片方だけが変更されたら落ちるようにする。
+
+test('バックデート保存と移行後の再計算で、同じ volume になる（基準体重が一致する）', () => {
+  const exercises = [{ id: 'chin', name: 'チンニング', load: 'bodyweight', loadFactor: 1 }];
+  const bodyRecords = [
+    { date: '2026-05-01', weight: 58, muscle: 27, fatPct: 20 },
+    { date: '2026-08-01', weight: 62, muscle: 29, fatPct: 18 }
+  ];
+  const profile = { weight: 60 };
+  const backdatedDate = '2026-05-15'; // 5/1の記録(58kg)が有効な日
+
+  // js/workoutTab.js の finishSession と同じ手順で volume を計算する
+  const sets = [{ exId: 'chin', weight: 0, reps: 10 }];
+  const bodyweightAtSave = bodyweightAsOf(bodyRecords, backdatedDate, profile);
+  const savedVolume = calcVolume(sets, { exercises, bodyweight: bodyweightAtSave });
+
+  // 同じレコードを移行処理に通す
+  const migrated = migrateHistoricalVolume(
+    [{ id: 'w1', date: backdatedDate, sets, volume: savedVolume }],
+    exercises, bodyRecords, profile
+  );
+
+  assert.equal(bodyweightAtSave, 58, 'その日時点の体重(58kg)を使うこと。今の体重62kgではない');
+  assert.equal(savedVolume, 580);
+  assert.equal(migrated[0].volume, savedVolume, '保存時と移行後で volume が一致すること');
+});
+
+test('その日以前に体重記録が無ければ、保存時も移行時も profile.weight を使う', () => {
+  const exercises = [{ id: 'chin', name: 'チンニング', load: 'bodyweight', loadFactor: 1 }];
+  const bodyRecords = [{ date: '2026-08-01', weight: 62, muscle: 29, fatPct: 18 }];
+  const profile = { weight: 60 };
+  const date = '2026-04-01'; // 体重記録より前
+
+  const sets = [{ exId: 'chin', weight: 0, reps: 10 }];
+  const bw = bodyweightAsOf(bodyRecords, date, profile);
+  const savedVolume = calcVolume(sets, { exercises, bodyweight: bw });
+  const migrated = migrateHistoricalVolume([{ id: 'w1', date, sets, volume: savedVolume }], exercises, bodyRecords, profile);
+
+  assert.equal(bw, 60);
+  assert.equal(migrated[0].volume, savedVolume);
 });

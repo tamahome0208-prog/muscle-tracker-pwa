@@ -1,3 +1,11 @@
+// このファイルのテストが「何を保証しているか」の記録。
+// 下の MUTATION 行は、実装を意図的にその形へ壊したときに落ちるテストの件数である。
+// テストが通ることは、そのテストが何かを保証している証拠にはならない。
+// 保証しているかどうかは、壊して落ちることでしか確かめられない(docs/SPEC.md §5.2)。
+// 実装を変えたら、この記録も実際に壊して数え直すこと。
+// MUTATION: js/store.js:isValidSafetyTargets の呼び出しを外す => 期待失敗 4件
+// MUTATION: js/store.js:MIN_KCAL_FLOOR 1200->0 => 期待失敗 1件
+// MUTATION: js/store.js:IMPORT_RECORD_VALIDATORS.workouts を削除 => 期待失敗 2件
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createStore, DEFAULTS } from '../js/store.js';
@@ -248,10 +256,13 @@ test('session を保存して読み戻せる(startedAtも含めて)', () => {
 
 test('importAll は datetime/items を欠いた meals レコードを弾き、他キーも巻き込んで書き込まない', () => {
   const store = createStore(memoryStorage());
-  store.set('workouts', [{ id: 'keep-w' }]);
+  store.set('workouts', [{ id: 'keep-w', date: '2026-08-01', sets: [] }]);
   assert.throws(
     () => store.importAll(JSON.stringify({
-      workouts: [{ id: 'new-w' }],
+      // workouts 側は妥当にしておく（R2.6.2 で workouts にも形状検証が入ったため、
+      // ここが不正だと meals ではなく workouts で先に弾かれ、このテストの
+      // 「meals の不正が全体を止める」という意図が検証できない）
+      workouts: [{ id: 'new-w', date: '2026-08-19', sets: [] }],
       meals: [{ id: 'broken-meal' }] // datetime も items も無い
     })),
     /meals.*レコード形式/
@@ -301,4 +312,145 @@ test('lastExportDate/backupReminderDismissedAt を保存して読み戻せる', 
   store.set('settings', { ...settings, lastExportDate: '2026-08-04', backupReminderDismissedAt: '2026-08-01' });
   assert.equal(store.get('settings').lastExportDate, '2026-08-04');
   assert.equal(store.get('settings').backupReminderDismissedAt, '2026-08-01');
+});
+
+// --- 【安全装置】インポート経路での profile.targets 値域検証 ---
+// 設定タブ(js/settingsTab.js)の kcalFloor >= MIN_KCAL_FLOOR ハードブロックは
+// 画面の保存ボタンにしか付いていなかった。バックアップJSONを手で編集して
+// インポートすれば、そのブロックを完全に迂回して安全装置を無効化できた。
+// これらは「値がストアに入る全ての経路で値域を守る」ことの回帰テスト。
+
+test('importAll は警告ライン(kcalFloor)が下限未満のprofileを弾く', () => {
+  const store = createStore(memoryStorage());
+  assert.throws(
+    () => store.importAll(JSON.stringify({
+      profile: { targets: { protein: 100, kcalMin: 1700, kcalMax: 1800, kcalFloor: 1, alcoholMl: 500 } }
+    })),
+    /安全設定が範囲外/
+  );
+  // 弾かれた以上、既存の値は書き換わっていない
+  assert.equal(store.get('profile').targets.kcalFloor, DEFAULTS.profile.targets.kcalFloor);
+});
+
+test('importAll はカロリー上限が警告ラインを下回るprofileを弾く', () => {
+  // kcalMax < kcalFloor は「目標どおり食べると必ず警告ラインを割る」自己矛盾した設定。
+  const store = createStore(memoryStorage());
+  assert.throws(
+    () => store.importAll(JSON.stringify({
+      profile: { targets: { protein: 100, kcalMin: 1000, kcalMax: 1000, kcalFloor: 1440, alcoholMl: 500 } }
+    })),
+    /安全設定が範囲外/
+  );
+});
+
+test('importAll は kcalMin > kcalMax・負のalcoholMl・0以下の目標を弾く', () => {
+  const store = createStore(memoryStorage());
+  const base = { protein: 100, kcalMin: 1700, kcalMax: 1800, kcalFloor: 1440, alcoholMl: 500 };
+  const bad = [
+    { ...base, kcalMin: 1900 },        // 下限 > 上限
+    { ...base, alcoholMl: -1 },        // 負
+    { ...base, protein: 0 },           // 0以下（警告を恒久的に無効化する抜け道）
+    { ...base, kcalMin: 0 },
+    { ...base, kcalFloor: 'たくさん' } // 非数値
+  ];
+  for (const targets of bad) {
+    assert.throws(
+      () => store.importAll(JSON.stringify({ profile: { targets } })),
+      /安全設定が範囲外/,
+      `${JSON.stringify(targets)} は弾かれなければならない`
+    );
+  }
+});
+
+test('importAll は dayOverHour が0〜23の整数でなければ弾く', () => {
+  const store = createStore(memoryStorage());
+  for (const dayOverHour of [-1, 24, 22.5, '22', null]) {
+    assert.throws(
+      () => store.importAll(JSON.stringify({ profile: { dayOverHour } })),
+      /安全設定が範囲外/,
+      `dayOverHour=${JSON.stringify(dayOverHour)} は弾かれなければならない`
+    );
+  }
+});
+
+test('importAll は妥当な範囲のprofileなら受け入れる', () => {
+  const store = createStore(memoryStorage());
+  store.importAll(JSON.stringify({
+    profile: { targets: { protein: 120, kcalMin: 1800, kcalMax: 2000, kcalFloor: 1500, alcoholMl: 350 }, dayOverHour: 21 }
+  }));
+  assert.equal(store.get('profile').targets.protein, 120);
+  assert.equal(store.get('profile').targets.kcalFloor, 1500);
+  assert.equal(store.get('profile').dayOverHour, 21);
+});
+
+test('profile.dayOverHour の既定値は22（20時では夕食前に毎日誤爆する）', () => {
+  const store = createStore(memoryStorage());
+  assert.equal(store.get('profile').dayOverHour, 22);
+});
+
+// --- インポート時のレコード形状検証（R2.6.2） ---
+// 【なぜ形状まで見るか】isValidFor は「配列かどうか」しか見ない。日付を欠いた
+// ワークアウトや items を持たない食事が入り込むと、集計側は防御的に読み飛ばすため
+// 例外は出ないが、利用者から見れば記録が消えている。黙って受け入れるより断る。
+
+test('importAll は date/sets を欠いた workouts レコードを弾く', () => {
+  const store = createStore(memoryStorage());
+  const bad = [
+    [{ id: 'w1', sets: [] }],                       // date なし
+    [{ id: 'w1', date: 'いつか', sets: [] }],        // date 形式が不正
+    [{ id: 'w1', date: '2026-08-19' }],             // sets なし
+    [{ id: 'w1', date: '2026-08-19', sets: 'x' }],  // sets が配列でない
+    [null]
+  ];
+  for (const workouts of bad) {
+    assert.throws(
+      () => store.importAll(JSON.stringify({ workouts })),
+      /レコード形式が不正/,
+      `${JSON.stringify(workouts)} は弾かれなければならない`
+    );
+  }
+  store.importAll(JSON.stringify({ workouts: [{ id: 'w1', date: '2026-08-19', sets: [] }] }));
+  assert.equal(store.get('workouts').length, 1);
+});
+
+test('importAll は date/weight を欠いた body レコードを弾く（muscle/fatPct は必須にしない）', () => {
+  const store = createStore(memoryStorage());
+  for (const body of [[{ date: '2026-08-19' }], [{ weight: 60 }], [{ date: 'x', weight: 60 }]]) {
+    assert.throws(() => store.importAll(JSON.stringify({ body })), /レコード形式が不正/);
+  }
+  // 体重計だけの記録（InBodyでない）は正当なので通す
+  store.importAll(JSON.stringify({ body: [{ date: '2026-08-19', weight: 60 }] }));
+  assert.equal(store.get('body').length, 1);
+});
+
+test('importAll は date/durationMin を欠いた badminton レコードを弾く', () => {
+  const store = createStore(memoryStorage());
+  for (const badminton of [[{ date: '2026-08-19' }], [{ durationMin: 60 }], [{ date: '2026-08-19', durationMin: 'ながい' }]]) {
+    assert.throws(() => store.importAll(JSON.stringify({ badminton })), /レコード形式が不正/);
+  }
+  store.importAll(JSON.stringify({ badminton: [{ date: '2026-08-19', durationMin: 60 }] }));
+  assert.equal(store.get('badminton').length, 1);
+});
+
+test('importAll は id/name を欠いた foods レコードを弾く', () => {
+  const store = createStore(memoryStorage());
+  for (const foods of [[{ name: 'ゆで卵' }], [{ id: 'f1' }], [{ id: 1, name: 'x' }]]) {
+    assert.throws(() => store.importAll(JSON.stringify({ foods })), /レコード形式が不正/);
+  }
+  store.importAll(JSON.stringify({ foods: [{ id: 'f1', name: 'ゆで卵' }] }));
+  assert.equal(store.get('foods').length, 1);
+});
+
+test('importAll は形状不正を見つけたら、他のキーも巻き込んで一切書き込まない', () => {
+  const store = createStore(memoryStorage());
+  store.set('meals', [{ id: 'keep', datetime: '2026-08-01T19:00', items: [] }]);
+  assert.throws(
+    () => store.importAll(JSON.stringify({
+      meals: [{ id: 'new', datetime: '2026-08-19T19:00', items: [] }],
+      workouts: [{ id: 'broken' }]
+    })),
+    /レコード形式が不正/
+  );
+  assert.equal(store.get('meals')[0].id, 'keep', '既存データが上書きされていないこと');
+  assert.equal(store.get('workouts').length, 0);
 });

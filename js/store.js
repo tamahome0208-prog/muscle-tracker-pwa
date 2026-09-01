@@ -37,6 +37,12 @@ function deepFreeze(value) {
 // targets.kcalFloor は引き続きユーザーが設定タブで上書き可能。
 const DEFAULT_KCAL_FLOOR = 1440;
 
+/**
+ * 警告ライン(kcalFloor)として設定できる下限。これを下回る値はどの経路からも保存できない。
+ * 設定タブの入力・バックアップJSONのインポートの両方で強制する。
+ */
+export const MIN_KCAL_FLOOR = 1200;
+
 export const DEFAULTS = deepFreeze({
   profile: {
     height: 162,
@@ -50,6 +56,10 @@ export const DEFAULTS = deepFreeze({
     sex: 'male',
     startDate: null,
     targets: { protein: 100, kcalMin: 1700, kcalMax: 1800, kcalFloor: DEFAULT_KCAL_FLOOR, alcoholMl: 500 },
+    // 「その日の食事はほぼ終わった」とみなす時刻(0〜23)。js/nutrition.js の isDayOver 参照。
+    // 朝プロテイン+夕食1食というこのユーザーの食生活では、20時では夕食前に
+    // 毎日必ず「食べなさすぎ」警告が誤爆するため22時を既定にしている。
+    dayOverHour: 22,
     // ALDH2(アルコール分解酵素)のフラッシング(飲酒で顔が赤くなる)質問への回答。
     // null = 未回答(js/mealTab.js が食事タブで一度だけ質問を出す)。
     // 'yes' / 'no' / 'skipped' のいずれかになった後は自動では二度と質問を出さない
@@ -137,8 +147,33 @@ function isValidFor(key, value) {
 // 混ざっていても素通りしてしまう(js/mealTab.js が後段でそれを前提に描画して落ちる)。
 // バックアップ全体を無効として弾くのはここだけの役割で、通常の store.set() の
 // 挙動(既存テストが前提にしている)は変えない。
+/** 'YYYY-MM-DD' 形式か。壊れた日付は集計側で黙って読み飛ばされ、記録が消えたように見える */
+const isDateStr = (v) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v);
+
+/**
+ * インポート時のレコード形状検証。
+ *
+ * 【なぜ形状まで見るか】isValidFor は「配列かどうか」しか見ない。
+ * 形だけ配列であれば中身が何であっても通るため、日付を欠いたワークアウトや
+ * items を持たない食事が入り込む。それらは集計側(weeklyVolume / dayTotals)が
+ * 防御的に読み飛ばすため例外は出ないが、**利用者から見れば記録が消えている**。
+ * 壊れたデータを黙って受け入れるより、インポートを断ってバックアップを
+ * 選び直してもらう方がよい。
+ *
+ * 各検証は「集計側がそのレコードを数えるために最低限必要なフィールド」だけを見る。
+ * 過剰に厳しくすると、古いバージョンで作った正当なバックアップが復元できなくなる。
+ */
 const IMPORT_RECORD_VALIDATORS = {
-  meals: (m) => m != null && typeof m.datetime === 'string' && Array.isArray(m.items)
+  meals: (m) => m != null && typeof m.datetime === 'string' && Array.isArray(m.items),
+  // date と sets が無ければ weeklyVolume / programStatus のどちらにも数えられない
+  workouts: (w) => w != null && isDateStr(w.date) && Array.isArray(w.sets),
+  // date と weight が無ければ bodyweightAsOf / bodySeries のどちらにも使えない。
+  // muscle / fatPct は InBody 以外の記録(体重計だけ)もありうるので必須にしない。
+  body: (b) => b != null && isDateStr(b.date) && Number.isFinite(Number(b.weight)),
+  // date と durationMin が無ければ運動消費(dailyExerciseKcal)に数えられない
+  badminton: (b) => b != null && isDateStr(b.date) && Number.isFinite(Number(b.durationMin)),
+  // id と name が無ければクイック記録のボタンにも食事の追加にも使えない
+  foods: (f) => f != null && typeof f.id === 'string' && typeof f.name === 'string'
 };
 
 function isValidRecordShapeFor(key, value) {
@@ -225,6 +260,47 @@ export function createStore(storage = globalThis.localStorage) {
     return JSON.stringify(out, null, 2);
   }
 
+  /**
+   * 安全装置の設定値(profile.targets / profile.dayOverHour)の値域を検証する。
+   *
+   * 【なぜインポート経路でも検証するか】設定タブ(js/settingsTab.js)は
+   * kcalFloor >= MIN_KCAL_FLOOR をハードブロックしているが、その検証は
+   * 画面の保存ボタンにしか付いていない。バックアップJSONを手で編集して
+   * {"profile":{"targets":{"kcalFloor":1}}} をインポートすれば、画面のブロックを
+   * 完全に迂回して安全装置を無効化できた。
+   * 安全装置の値域は、値がストアに入る全ての経路で守られなければならない。
+   *
+   * 指定の無いキーは検証しない(DEFAULTS が deepMerge で補われるため)。
+   */
+  function isValidSafetyTargets(profile) {
+    if (!isPlainObject(profile)) return true; // profile 自体の形式は isValidFor が見る
+    if ('dayOverHour' in profile) {
+      const h = profile.dayOverHour;
+      if (typeof h !== 'number' || !Number.isInteger(h) || h < 0 || h > 23) return false;
+    }
+    if (!('targets' in profile)) return true;
+    const t = profile.targets;
+    if (!isPlainObject(t)) return false;
+
+    for (const k of ['protein', 'kcalMin', 'kcalMax', 'kcalFloor']) {
+      if (!(k in t)) continue;
+      if (typeof t[k] !== 'number' || !Number.isFinite(t[k]) || t[k] <= 0) return false;
+    }
+    if ('alcoholMl' in t) {
+      if (typeof t.alcoholMl !== 'number' || !Number.isFinite(t.alcoholMl) || t.alcoholMl < 0) return false;
+    }
+    if ('kcalFloor' in t && t.kcalFloor < MIN_KCAL_FLOOR) return false;
+    if ('kcalMin' in t && 'kcalMax' in t && t.kcalMin > t.kcalMax) return false;
+
+    // 下限・上限のどちらも警告ラインを下回ってはならない。上限が警告ラインより低いと、
+    // 摂取が警告ラインに達する前に必ず「上限超過」側の状態になる。
+    const floor = 'kcalFloor' in t ? t.kcalFloor : DEFAULT_KCAL_FLOOR;
+    for (const k of ['kcalMin', 'kcalMax']) {
+      if (k in t && t[k] < floor) return false;
+    }
+    return true;
+  }
+
   function importAll(json) {
     let data;
     try {
@@ -245,6 +321,13 @@ export function createStore(storage = globalThis.localStorage) {
       }
       if (!isValidRecordShapeFor(key, data[key])) {
         throw new Error(`インポートに失敗しました: ${key} のレコード形式が不正です`);
+      }
+      if (key === 'profile' && !isValidSafetyTargets(data[key])) {
+        throw new Error(
+          `インポートに失敗しました: profile の安全設定が範囲外です`
+          + `（警告ラインは${MIN_KCAL_FLOOR}kcal以上、カロリー下限・上限は警告ライン以上、`
+          + `就寝判定時刻は0〜23の整数である必要があります）`
+        );
       }
     }
 

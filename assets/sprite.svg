@@ -91,4 +91,14 @@
   <symbol id="torso-leg" viewBox="0 0 40 56">
     <path fill="currentColor" d="M12.8 41.4h5.4l.6 12.2h-4.6Zm8.8 0H27l-1.4 12.2h-4.6Z"/>
   </symbol>
+  <symbol id="i-rotate" viewBox="0 0 24 24">
+    <path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" d="M20 12a8 8 0 1 1-2.6-5.9"/>
+    <path fill="currentColor" d="M20.8 3.2v5.4h-5.4Z"/>
+  </symbol>
+  <symbol id="i-back" viewBox="0 0 24 24">
+    <path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" d="M20 12H5m0 0 6.4-6.4M5 12l6.4 6.4"/>
+  </symbol>
+  <symbol id="i-up" viewBox="0 0 24 24">
+    <path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" d="M6.5 17.5 17 7m0 0h-7.4M17 7v7.4"/>
+  </symbol>
 </svg>

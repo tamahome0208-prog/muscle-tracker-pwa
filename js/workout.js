@@ -170,12 +170,25 @@ export function calcVolume(sets, context) {
  * 場合は呼び出し側で行うこと）。
  * 日付が不正な記録（weekKey が例外を投げる形式、null要素を含む）は、集計前に黙って除外する。
  */
-export function weeklyVolume(workouts) {
+export function weeklyVolume(workouts, contextFor = null) {
   const map = new Map();
   for (const w of workouts) {
     if (!isValidDateStr(w?.date)) continue;
     const key = weekKey(w.date);
-    const volume = w.volume ?? calcVolume(w.sets ?? []);
+    // 【フォールバックにも context を渡す】
+    // volume がスタンプされていないレコード(古いバックアップ・手編集したJSON・
+    // importAll 経由で入ってきたもの)は、ここで計算し直される。
+    // 以前はここが calcVolume(w.sets ?? []) と context 無しで呼ばれており、
+    // calcVolume は context 省略時に全種目を 'external'(外部重量)として扱うため、
+    // 自重種目・アシスト種目のボリュームが丸ごと0として集計されていた。
+    // チンニング10回が0kgとして数えられる、という静かな欠落である。
+    //
+    // contextFor(workout) は「そのワークアウト日時点の」exercises と bodyweight を
+    // 返す関数。日付ごとに変える必要があるため単一のオブジェクトではなく関数で受ける
+    // (migrateHistoricalVolume が bodyweightAsOf を使うのと同じ理由: 今日の体重で
+    // 過去のボリュームを塗り替えてはならない)。
+    // 省略時は従来どおり context 無しで計算する(後方互換)。
+    const volume = w.volume ?? calcVolume(w.sets ?? [], contextFor ? contextFor(w) : undefined);
     map.set(key, (map.get(key) ?? 0) + volume);
   }
   return [...map.entries()]

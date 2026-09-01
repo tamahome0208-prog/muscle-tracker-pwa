@@ -1,3 +1,11 @@
+// このファイルのテストが「何を保証しているか」の記録。
+// 下の MUTATION 行は、実装を意図的にその形へ壊したときに落ちるテストの件数である。
+// テストが通ることは、そのテストが何かを保証している証拠にはならない。
+// 保証しているかどうかは、壊して落ちることでしか確かめられない(docs/SPEC.md §5.2)。
+// 実装を変えたら、この記録も実際に壊して数え直すこと。
+// MUTATION: js/energy.js:dailyExerciseKcal 体重不正時に null->0 => 期待失敗 2件
+// MUTATION: js/energy.js:eaFloorKcal exerciseKcal===null のガードを外す => 期待失敗 1件
+// MUTATION: js/energy.js:energyAvailability exerciseKcal===null のガードを外す => 期待失敗 1件
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -138,10 +146,15 @@ test('dailyExerciseKcal: セッションが無ければ0', () => {
   assert.equal(dailyExerciseKcal([], [], TODAY, 60), 0);
 });
 
-test('dailyExerciseKcal: weightKgが不正なら0', () => {
+test('dailyExerciseKcal: weightKgが不正なら null（旧仕様の 0 から変更）', () => {
+  // 【なぜ変えたか】旧仕様は 0 を返し、このテストがその挙動を固定していた。
+  // しかし EAフロア = 30 × FFM + 運動消費kcal なので、0 を返すとフロアが
+  // 運動分だけ低くなり、週5日運動している人に「運動していない人の下限」を
+  // 適用することになる。安全装置が緩む方向であり、テストが誤った挙動を
+  // 守っていた状態だった。分からないときは緩めず、判定を保留する。
   const workouts = [{ date: TODAY, sets: new Array(18).fill({ exId: 'x', weight: 10, reps: 10 }) }];
-  assert.equal(dailyExerciseKcal(workouts, [], TODAY, 0), 0);
-  assert.equal(dailyExerciseKcal(workouts, [], TODAY, 'oops'), 0);
+  assert.equal(dailyExerciseKcal(workouts, [], TODAY, 0), null);
+  assert.equal(dailyExerciseKcal(workouts, [], TODAY, 'oops'), null);
 });
 
 test('dailyExerciseKcal: 直近7日に筋トレ3回・バドミントン2回を記録した週の平均を計算する', () => {
@@ -409,4 +422,38 @@ test('macroTargets: エネルギー密度が低い場合、脂質は0.5×体重�
   approx(r.fatG, 1300 * 0.2 / 9);
   assert.ok(r.fatG < 30, '緩和前の0.5×体重(30g)より低い値まで下がっているはず');
   assert.equal(r.status, 'energyTooLow');
+});
+
+// --- 【安全装置】体重不明時にEAフロアを緩めないこと ---
+// 以前は dailyExerciseKcal が体重不正時に 0 を返し、コメントは「運動消費不明で
+// 計算を止めるより、EA計算側で『運動0』として安全側に振れる方を優先する」と
+// 書いていた。これは逆である。運動消費が 0 として扱われると
+// EAフロア(30 × FFM + 運動消費)が下がり、警告が緩む。
+
+test('dailyExerciseKcal: 体重が不正・未指定なら null を返す（0ではない）', () => {
+  const workouts = [{ date: '2026-08-19', sets: [{}, {}, {}] }];
+  for (const bad of [null, undefined, 0, -5, NaN, 'おもい']) {
+    assert.equal(
+      dailyExerciseKcal(workouts, [], '2026-08-19', bad), null,
+      `体重 ${String(bad)} は null を返すべき（0を返すとEAフロアが運動分だけ低くなる）`
+    );
+  }
+});
+
+test('dailyExerciseKcal: 体重が妥当なら従来どおり数値を返す', () => {
+  const workouts = [{ date: '2026-08-19', sets: [{}, {}, {}] }];
+  const v = dailyExerciseKcal(workouts, [], '2026-08-19', 60);
+  assert.ok(Number.isFinite(v) && v > 0);
+});
+
+test('eaFloorKcal: 運動消費が null（不明）なら null を返す', () => {
+  assert.equal(eaFloorKcal(48, null), null);
+  // 未指定(undefined)は従来どおり 0 として扱う（後方互換）
+  assert.equal(eaFloorKcal(48, undefined), 30 * 48);
+  assert.equal(eaFloorKcal(48, 184), 30 * 48 + 184);
+});
+
+test('energyAvailability: 運動消費が null（不明）なら null を返す', () => {
+  assert.equal(energyAvailability(1800, null, 48), null);
+  assert.equal(energyAvailability(1800, 184, 48), (1800 - 184) / 48);
 });

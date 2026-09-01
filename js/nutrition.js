@@ -98,12 +98,79 @@ export function dayTotals(meals, dateStr) {
 }
 
 /**
+ * 「その日の食事はほぼ終わった」とみなす時刻の既定値。
+ *
+ * 【なぜ20時ではなく22時か】このユーザーの食生活は「朝にプロテイン + 夕食1食」で、
+ * 夕食の時間帯は19〜21時。閾値が20時だと、夕食を食べる直前の毎日必ず
+ * 「摂取が少なすぎます」という danger 警告が出る。毎日必ず誤爆する警告は
+ * 数日で無視されるようになり、本当に足りていない日の警告まで一緒に殺す。
+ * この閾値は「まだ食べる予定があるか」の代理変数であり、食事回数が少ない人ほど
+ * 遅い時刻に置く必要がある。利用者が profile.dayOverHour で変更できる。
+ */
+export const DEFAULT_DAY_OVER_HOUR = 22;
+
+/**
+ * これを超えて食事記録が途切れたら「記録が止まっている」とみなす日数。
+ *
+ * 【なぜ必要か】achievement() は kcal === 0(まだ何も記録していない日)を
+ * danger の対象にしない。1日の途中で「0kcalです」と言われても意味が無いためで、
+ * その判断自体は正しい。しかし帰結として、食事を記録しなくなれば EA関連の警告は
+ * すべて消える。「食べていないから記録しない」と「記録していないから警告が
+ * 出ない」が区別できない状態になる。
+ * 極端な減量志向の再発は、まさに記録が途切れる形で現れる。沈黙を「問題なし」と
+ * 解釈しないために、途切れ自体を検知する。
+ *
+ * 3日: 週3回のトレーニング周期(A/B/C)を1周する長さ。これを超えると
+ * 「たまたま忘れた」ではなく習慣が止まっている可能性が高い。
+ */
+export const MEAL_LOG_GAP_DAYS = 3;
+
+/**
+ * 最後に食事を記録した日から todayStr までの日数。記録が1件も無ければ null。
+ * 壊れたレコード・未来日付は読み飛ばす(dayTotals と同じ防御方針)。
+ */
+export function daysSinceLastMealLog(meals, todayStr) {
+  if (!Array.isArray(meals) || typeof todayStr !== 'string') return null;
+  let latest = null;
+  for (const m of meals) {
+    if (!m || typeof m.datetime !== 'string') continue;
+    const day = m.datetime.slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) continue;
+    if (day > todayStr) continue; // 未来日付は端末の時計ずれ等。数えない
+    if (latest === null || day > latest) latest = day;
+  }
+  if (latest === null) return null;
+  const from = new Date(`${latest}T00:00:00Z`).getTime();
+  const to = new Date(`${todayStr}T00:00:00Z`).getTime();
+  if (!Number.isFinite(from) || !Number.isFinite(to)) return null;
+  return Math.max(0, Math.round((to - from) / 86400000));
+}
+
+/**
+ * 現在の時(0〜23)が「その日の食事は終わった」とみなす時刻に達しているか。
+ * 時計を直接読まず引数で受け取るのは、このモジュールを純粋関数のまま保つため。
+ * dayOverHour が不正な値(未設定・範囲外・非数値)なら既定値にフォールバックする。
+ */
+export function isDayOver(nowHour, dayOverHour = DEFAULT_DAY_OVER_HOUR) {
+  const h = Number(nowHour);
+  // Number() を通してから範囲を見てはならない。Number(null) === 0、Number('') === 0、
+  // Number([]) === 0 はいずれも「0時」という妥当な閾値として通ってしまい、
+  // 設定が壊れている端末で「常に dayOver = true」= 一日中 danger 警告、という
+  // 最悪の誤爆に化ける。型と整数性を先に確かめる。
+  const threshold =
+    typeof dayOverHour === 'number' && Number.isInteger(dayOverHour) && dayOverHour >= 0 && dayOverHour <= 23
+      ? dayOverHour
+      : DEFAULT_DAY_OVER_HOUR;
+  return Number.isFinite(h) && h >= threshold;
+}
+
+/**
  * 達成率と警告を返す。
  * 設計方針: 上限超過より「下限割れ」を重く扱う。摂取を削るほど目的から遠ざかるため。
  * kcal:0(まだ何も記録していない日)は「食べなさすぎ」danger警告の対象にしない。
  *
  * dayOver: その日の食事がほぼ終わっているとみなせるかどうか(呼び出し側が判定して渡す。
- * 例: 表示している日付が今日より前、または今日で現地時刻が20時以降)。
+ * 例: 表示している日付が今日より前、または今日で現地時刻が DEFAULT_DAY_OVER_HOUR 以降)。
  * 「食べなさすぎ」danger警告は、まだ食事の途中である日中に出し続けると
  * 一日の大半で表示され続ける壁紙と化し、1,000kcal台への逆戻りを止めるという
  * 本来の目的を果たせなくなる。そのため dayOver でない間はdanger警告を出さず、
@@ -133,33 +200,69 @@ export function achievement(totals, targets, { dayOver = false, ffmKg = null, ex
 
   const warnings = [];
 
-  const eaFloor = eaFloorKcal(ffmKg, exerciseKcal);
-  const floor = Number.isFinite(eaFloor) && eaFloor > 0 ? eaFloor : targets.kcalFloor;
+  // exerciseKcal === null は「運動消費が計算できなかった」(体重未記録など)の合図。
+  // このとき targets.kcalFloor の固定値へフォールバックしてはならない。
+  // 固定値(既定1440)は運動していない人向けの下限であり、週3トレ+週2バドミントンの
+  // 実際のフロア(30 × FFM + 運動消費)より必ず低い。分からないことを理由に
+  // 基準を緩めれば、それは安全装置ではなくなる。判定そのものを保留する。
+  const exerciseUnknown = exerciseKcal === null;
+  const eaFloor = exerciseUnknown ? null : eaFloorKcal(ffmKg, exerciseKcal);
+  const floor = exerciseUnknown
+    ? null
+    : (Number.isFinite(eaFloor) && eaFloor > 0 ? eaFloor : targets.kcalFloor);
 
-  if (kcal > targets.kcalMax) {
+  // 【安全装置・排他分岐の禁止】下限(EAフロア)の判定は、上限超過の判定とは
+  // 独立に評価しなければならない。
+  // 以前は if (kcal > kcalMax) {...} else if (dayOver) {下限判定} という排他分岐に
+  // なっており、利用者が設定タブで kcalMax を低く設定すると「上限超過(info)」が
+  // 成立した時点で下限判定に到達せず、EAフロアを大きく下回る日に danger が
+  // 一度も出なかった。具体例: kcalMax=1000 / 摂取1100kcal / EAフロア1624kcal のとき、
+  // 「食べなさすぎ」の状態で「目標を100kcal超えています」とだけ表示されていた。
+  // 安全装置は、他の設定値の組み合わせによって無効化されてはならない。
+  const belowFloor = kcal > 0 && Number.isFinite(floor) && floor > 0 && kcal < floor;
+
+  // 「残り」のアンカーは kcalMin と EAフロアの大きい方にする。kcalMin は利用者が
+  // 自由に下げられる値なので、それだけを基準にすると kcalMin=1000 のとき
+  // 900kcal時点で「残り100kcal」=もうすぐ終わり、という誤った安心を与える。
+  const remainingAnchor = Number.isFinite(floor) && floor > 0
+    ? Math.max(toNum(targets.kcalMin), floor)
+    : toNum(targets.kcalMin);
+
+  if (exerciseUnknown) {
+    warnings.push({
+      type: 'eaUnavailable',
+      level: 'warn',
+      message: '体重が未記録のため、運動量を反映した摂取量の下限を計算できません。設定タブで体重を登録してください'
+    });
+  }
+
+  if (dayOver && belowFloor) {
+    warnings.push({
+      type: 'kcalFloor',
+      level: 'danger',
+      // EAベースの目安が使えるときは、その根拠となる数字も併記する(単なる「少なすぎます」
+      // という言い切りより、どこから来た基準かを見せる方が誠実)。EA30は崖ではなく
+      // 警告ラインなので、ここでも「下回ると即座に何かが壊れる」とは言わない。
+      message: Number.isFinite(eaFloor) && eaFloor > 0
+        ? `${Math.round(kcal)}kcal は少なすぎます(エネルギー可用性の目安 約${Math.round(floor)}kcal を下回っています)。この水準が続くと筋肉が分解されて目的と逆方向に進みます`
+        : `${Math.round(kcal)}kcal は少なすぎます。この水準が続くと筋肉が分解されて目的と逆方向に進みます`
+    });
+  }
+
+  // フロアを下回っている間は上限超過を出さない。EAフロア未満の状態で
+  // 「目標を超えています」と伝えるのは摂取を減らす方向へ誘導することになり、
+  // このアプリの目的と正面から反する。
+  if (!belowFloor && kcal > targets.kcalMax) {
     warnings.push({
       type: 'kcalOver',
       level: 'info',
       message: `目標を${Math.round(kcal - targets.kcalMax)}kcal超えています`
     });
-  } else if (dayOver) {
-    if (kcal > 0 && kcal < floor) {
-      warnings.push({
-        type: 'kcalFloor',
-        level: 'danger',
-        // EAベースの目安が使えるときは、その根拠となる数字も併記する(単なる「少なすぎます」
-        // という言い切りより、どこから来た基準かを見せる方が誠実)。EA30は崖ではなく
-        // 警告ラインなので、ここでも「下回ると即座に何かが壊れる」とは言わない。
-        message: Number.isFinite(eaFloor) && eaFloor > 0
-          ? `${Math.round(kcal)}kcal は少なすぎます(エネルギー可用性の目安 約${Math.round(floor)}kcal を下回っています)。この水準が続くと筋肉が分解されて目的と逆方向に進みます`
-          : `${Math.round(kcal)}kcal は少なすぎます。この水準が続くと筋肉が分解されて目的と逆方向に進みます`
-      });
-    }
-  } else {
+  } else if (!dayOver) {
     warnings.push({
       type: 'kcalRemaining',
       level: 'info',
-      message: `残り ${Math.round(targets.kcalMin - kcal)}kcal`
+      message: `残り ${Math.round(remainingAnchor - kcal)}kcal`
     });
   }
 
@@ -172,14 +275,18 @@ export function achievement(totals, targets, { dayOver = false, ffmKg = null, ex
   }
 
   const proteinTarget = targets.protein;
-  const kcalMinTarget = targets.kcalMin;
+  // 達成率のアンカーも remainingAnchor(kcalMin と EAフロアの大きい方)に揃える。
+  // kcalMin だけを分母にすると、kcalMin=1000 に設定した利用者は1000kcal食べた
+  // 時点でバーが「達成(緑)」になり、EAフロア1624kcalを大きく下回ったまま
+  // 達成表示を受け取ることになる。
+  const kcalBarTarget = remainingAnchor;
 
   return {
     proteinPct: Number.isFinite(proteinTarget) && proteinTarget > 0
       ? Math.round((protein / proteinTarget) * 100)
       : 0,
-    kcalPct: Number.isFinite(kcalMinTarget) && kcalMinTarget > 0
-      ? Math.min(100, Math.round((kcal / kcalMinTarget) * 100))
+    kcalPct: Number.isFinite(kcalBarTarget) && kcalBarTarget > 0
+      ? Math.min(100, Math.round((kcal / kcalBarTarget) * 100))
       : 0,
     alcoholOver: alcoholMl > targets.alcoholMl,
     warnings

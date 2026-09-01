@@ -23,6 +23,10 @@ jobs:
         with:
           node-version: '22'
       - run: npm test
+      # 指示書(docs/SPEC.md)のうち機械検査できる要求を実際に検査する。
+      # 「テスト件数の下限を守ること」「体の写真から外部通信へ到達できないこと」等を
+      # 文章で宣言するだけでは、誰も守らなくても気づけない。ここが門になる。
+      - run: npm run verify
 
   deploy:
     needs: test

@@ -40,14 +40,27 @@ npm test                      # ロジック層のテスト（103件）
 
 ### テストの方針
 
-`js/store.js` / `workout.js` / `nutrition.js` / `game.js` / `body.js` は DOM とネットワークに触らない純粋関数として切り出し、Node の `node:test` でテストしています。UI・IndexedDB・外部APIは自動テスト対象外です。
+`js/workout.js` / `nutrition.js` / `energy.js` / `goals.js` / `micronutrients.js` / `game.js` / `body.js` / `calendarView.js` は DOM・ネットワーク・時計・乱数に触らない純粋関数として切り出し、Node の `node:test` でテストしています。`store.js` / `storageInfo.js` / `backupReminder.js` もテストを持ちます。UI・IndexedDB・外部APIは自動テスト対象外です。
 
 テストを追加するときは、**実装を意図的に壊してテストが落ちることを確認**してください。このプロジェクトでは「通っているが何も保証していないテスト」が12件見つかっています（例: `set()` から永続化処理を消しても全件パスする状態でした）。
 
+自動テストで捕まえられない要求（ファイル構成・import関係・CSP・初回転送バイト数・テスト件数の下限など）は `npm run verify` が機械的に検査します。CI は両方を実行し、どちらかが落ちればデプロイしません。詳細は [docs/SPEC.md](docs/SPEC.md)。
+
 ## データの扱い
 
-- 記録データは端末の localStorage、体の写真は IndexedDB に保存されます。サーバーには送信しません
-- Gemini API に送るのは食事写真・レシート画像・インボディ結果紙のみ
+- 記録データは端末の localStorage、体の写真は IndexedDB に保存されます。このアプリ自身のサーバーはありません
+- Gemini API（Google）に送るのは、**その場で選んだ**食事写真・レシート画像・インボディ結果紙の3種類のみ。送信前に画像そのものを表示して確認を挟みます
 - Open Food Facts に送るのは JAN コード13桁のみ（設定でオフにできます）
-- **体の写真は端末外に出ません。** `js/photos.js` と `js/photoTab.js` には外部通信APIが1つも含まれておらず、送信経路が構造的に存在しません
 - バックアップは設定タブから JSON でエクスポートします。API キーは意図的に含めません（端末外に持ち出されやすいファイルのため）
+
+### 体の写真が端末外に出ない根拠
+
+以前ここには「`js/photos.js` と `js/photoTab.js` には外部通信APIが1つも含まれておらず、送信経路が構造的に存在しません」と書いていました。**この推論は成立しません。** 同じ検索は `js/homeTab.js` に対しても0件を返しますが、`homeTab.js` は `import { analyzeInbody } from './ocr.js'` 経由で画像を Google に送っています。ファイル単位の検索は、送信経路の不在を証明しません。
+
+現在の根拠は次の3つで、いずれも `npm run verify` が機械的に検査します。
+
+1. **推移的な到達可能性**（R2.7.1）— `photos.js` / `photoTab.js` から静的 import で到達できる全モジュールに、`fetch` / `XMLHttpRequest` / `sendBeacon` / `WebSocket` / `EventSource` / 外部URL が存在しないこと
+2. **CSP**（R2.7.2）— `index.html` の `connect-src` が Gemini と Open Food Facts の2つだけを許可する。どのファイルがどう import しようと、ここに無い宛先へはブラウザが送らせません
+3. **`ocr.js` 側の門**（R2.7.6）— 送信できるのは `File` インスタンス、つまり利用者がその場の操作で選んだファイルだけ。IndexedDB に保存された体の写真は素の `Blob` なので、渡しても送信されず例外になります
+
+加えて、写真の Blob を返す API（`listPhotos` など）を import してよいのは `js/photoTab.js` だけ、という規約も検査しています（R2.7.4）。日付だけが必要なら `listPhotoDates()`、件数だけなら `countPhotos()` を使います。

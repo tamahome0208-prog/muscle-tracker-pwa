@@ -7,7 +7,9 @@ import { latestBody, currentBodyweight } from './body.js';
 import { microTargetsForAge, applyAldh2Answer, alcoholGrams, ALCOHOL_RISK_G } from './micronutrients.js';
 import { ffmi, HEALTHY_BODYFAT_RANGE_LOW, HEALTHY_BODYFAT_RANGE_HIGH } from './goals.js';
 import { readPersistedState, readStorageEstimate, persistedStateText, storageEstimateText } from './storageInfo.js';
-import { listPhotos } from './photos.js';
+import { countPhotos } from './photos.js';
+import { MIN_KCAL_FLOOR } from './store.js';
+import { renderStatusBar } from './mealTab.js';
 
 let store;
 
@@ -42,6 +44,8 @@ export function renderSettingsTab() {
       <div class="ex-ctrl">カロリー下限 <input type="number" inputmode="numeric" id="tKcalMin" value="${t.kcalMin}" style="width:90px"></div>
       <div class="ex-ctrl">カロリー上限 <input type="number" inputmode="numeric" id="tKcalMax" value="${t.kcalMax}" style="width:90px"></div>
       <div class="ex-ctrl">警告ライン <input type="number" inputmode="numeric" id="tKcalFloor" value="${t.kcalFloor}" style="width:90px"></div>
+      <div class="ex-ctrl">1日の食事の終わり <input type="number" inputmode="numeric" id="tDayOverHour" value="${profile.dayOverHour}" style="width:80px">時</div>
+      <p class="muted">この時刻を過ぎてから、その日の摂取が警告ラインを下回っていれば「食べなさすぎ」の警告を出します。夕食が遅い場合は遅く設定してください。早すぎると、夕食を食べる前に毎日警告が出て意味を失います（既定22時）。</p>
       <div class="ex-ctrl">アルコール量の目安 <input type="number" inputmode="numeric" id="tAlcohol" value="${t.alcoholMl}" style="width:90px">ml</div>
       <p class="muted">純アルコール換算で約${Math.round(alcoholGrams(t.alcoholMl))}g/日相当です(度数5%換算。食事タブ・上のバーには常にこの純アルコール(g)換算で表示されます)。
         参考: MHLW「飲酒ガイドライン」(2024)は男性で生活習慣病のリスクが高まる目安を1日${ALCOHOL_RISK_G}gとしています。危険という意味ではなく、比較のための目安です。</p>
@@ -122,6 +126,7 @@ export function renderSettingsTab() {
     const kcalMax = Number($('#tKcalMax').value);
     const kcalFloor = Number($('#tKcalFloor').value);
     const alcoholMl = Number($('#tAlcohol').value);
+    const dayOverHour = Number($('#tDayOverHour').value);
 
     // 空欄で保存すると Number('') === 0 になり、js/nutrition.js は目標が0以下の
     // 項目を「警告なし」として扱う。このユーザーはカロリーを削りたい衝動を
@@ -149,8 +154,23 @@ export function renderSettingsTab() {
     }
     // 1200kcalを下回る設定は拒否する。トレーニングを続ける以上、これより下は
     // 筋肉の分解が進む領域であり、警告ライン自体をそこまで下げさせない。
-    if (kcalFloor < 1200) {
-      toast('警告ラインは1200kcal未満にはできません（それを下回ると筋肉が分解されます）');
+    if (kcalFloor < MIN_KCAL_FLOOR) {
+      toast(`警告ラインは${MIN_KCAL_FLOOR}kcal未満にはできません（それを下回ると筋肉が分解されます）`);
+      return;
+    }
+    // カロリー下限・上限が警告ラインを下回る設定を拒否する。
+    // 【なぜ必要か】「上限が警告ラインより低い」設定は、目標どおりに食べると
+    // 必ず警告ラインを割るという自己矛盾した状態である。加えて以前の
+    // js/nutrition.js は上限超過の判定が成立した時点で下限判定に到達しない
+    // 排他分岐だったため、kcalMax を下げるだけで「食べなさすぎ」警告そのものを
+    // 到達不能にできた。判定側は修正済みだが、入力側でも同じ穴を塞いでおく
+    // (安全装置は1箇所の修正に依存させない)。
+    if (kcalMin < kcalFloor || kcalMax < kcalFloor) {
+      toast(`カロリー下限・上限は警告ライン(${kcalFloor}kcal)以上にしてください`);
+      return;
+    }
+    if (!Number.isInteger(dayOverHour) || dayOverHour < 0 || dayOverHour > 23) {
+      toast('「1日の食事の終わり」には0〜23の整数を入力してください');
       return;
     }
 
@@ -181,11 +201,15 @@ export function renderSettingsTab() {
     // なったため、ここでの保存失敗を黙って無視できない(他の保存パスと同様に
     // try/catchで失敗を検知し、ボタンが何も言わずに無反応になるのを防ぐ)。
     try {
-      store.set('profile', { ...profile, height, weight, age, targets: { protein, kcalMin, kcalMax, kcalFloor, alcoholMl } });
+      store.set('profile', { ...profile, height, weight, age, dayOverHour, targets: { protein, kcalMin, kcalMax, kcalFloor, alcoholMl } });
     } catch {
       toast('保存できませんでした（端末の空き容量を確認してください）');
       return;
     }
+    // 目標を変えたらステータスバー(死守2項目・EAフロア警告)も即座に描き直す。
+    // 保存したのに古い目標のままバーが表示され続けると、何が保存されたのか
+    // 確認できない。
+    renderStatusBar();
     toast(floorWarning ?? '目標を保存しました', floorWarning ? 6000 : undefined);
   });
 
@@ -287,8 +311,9 @@ async function fillStorageStatus() {
   const photosEl = $('#cntPhotos');
   if (!photosEl) return;
   try {
-    const photos = await listPhotos();
-    photosEl.textContent = String(photos.length);
+    // 件数だけを受け取る。このモジュールは settings.geminiKey を読み書きするので、
+    // 体の写真のBlobを同じスコープに置いてはならない(js/photos.js の countPhotos 参照)。
+    photosEl.textContent = String(await countPhotos());
   } catch {
     photosEl.textContent = '不明';
   }
@@ -409,7 +434,7 @@ function renderMicroCard(profile) {
   const t = microTargetsForAge(profile.age);
   const bandLabel = t.band === '18-29' ? '18〜29歳' : '30〜49歳';
   return `<h2 style="margin-top:0">参考栄養素の基準値</h2>
-    <p class="muted">年齢${profile.age}歳 → ${bandLabel}の基準値を使用しています(日本人の食事摂取基準2025年版)。</p>
+    <p class="muted">年齢${profile.age}歳のため、${bandLabel}の基準値を使用しています(日本人の食事摂取基準2025年版)。</p>
     <p>食物繊維: <strong>${t.fibreG}g/日</strong> <span class="muted">目標量</span></p>
     <p>ビタミンD: <strong>${t.vitaminDUg}µg/日</strong> <span class="muted">目安量(耐容上限量 ${t.vitaminDUlUg}µg)</span></p>
     <p>カルシウム: <strong>${t.calciumMg}mg/日</strong> <span class="muted">推奨量(耐容上限量 ${t.calciumUlMg}mg)</span></p>

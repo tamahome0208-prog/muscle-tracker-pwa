@@ -70,11 +70,44 @@ export async function savePhoto({ date, angle, source }) {
   return id;
 }
 
+/**
+ * 写真レコードを丸ごと返す。各レコードは blob(体の進捗写真そのもの)を含む。
+ *
+ * 【呼び出してよいのは js/photoTab.js だけ】
+ * この関数の戻り値は画像の実体を持つ。撮影タブ以外がこれを呼ぶと、
+ * 体の写真のBlobがそのモジュールのスコープに到達する。
+ * 実際、以前は js/recordTab.js(カレンダーの写真マーク用に日付だけが欲しい)と
+ * js/settingsTab.js(件数だけが欲しい)がこれを import しており、
+ * どちらも blob を使っていないのに blob へ手が届く状態だった。
+ * とくに settingsTab.js は settings.geminiKey を読み書きしている当のモジュールで、
+ * 「体の写真」と「APIキー」が同じスコープに同居していた。
+ * import を1行足すだけで漏洩が成立する距離にあってはならない。
+ *
+ * 日付だけが必要なら listPhotoDates()、件数だけなら countPhotos() を使うこと。
+ * この規約は scripts/verify-spec.mjs の R2.7.4 が機械的に検査する。
+ */
 export async function listPhotos() {
   const db = await openDb();
   const all = await wrap(tx(db, 'readonly').getAll());
   db.close();
   return all.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+}
+
+/**
+ * 写真が存在する日付の集合。blob は返さない。
+ * カレンダーに「この日は写真がある」印を出す用途(js/recordTab.js)。
+ */
+export async function listPhotoDates() {
+  const all = await listPhotos();
+  return new Set(all.map((p) => p?.date).filter((d) => typeof d === 'string'));
+}
+
+/** 保存されている写真の枚数。blob は返さない(js/settingsTab.js の「データの状態」用)。 */
+export async function countPhotos() {
+  const db = await openDb();
+  const n = await wrap(tx(db, 'readonly').count());
+  db.close();
+  return n;
 }
 
 export async function latestByAngle(angle) {

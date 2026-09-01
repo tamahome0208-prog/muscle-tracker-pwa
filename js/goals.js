@@ -12,7 +12,18 @@
 // 【このモジュール全体を貫く方針】
 // 体組成の実測値(InBody)は単体では信頼できない(InBody vs DXAで脂肪量に-2.9±2.0kgの
 // system的バイアス、SEE 1.9kg)。かつ1ヶ月の本当の進捗(0.3〜0.5kg)は同一デバイス内の
-// 測定誤差(SEM 0.77〜0.99%、Miller et al. 2018)より小さい。したがって:
+// 測定誤差(SEM 0.77〜0.99%、Miller et al. 2018)より小さい。
+//
+// 【出典の状態】このうち著者・年まで辿れるのは SEM 0.77〜0.99%(Miller et al. 2018)だけ。
+// 「InBody vs DXA で -2.9±2.0kg、SEE 1.9kg」と「1ヶ月の実進捗 0.3〜0.5kg」は
+// 一次文献を特定できていない(出典なし)。
+// ただし、この方針が依存しているのは個々の数値ではなく
+// 「測定誤差 > 1ヶ月の実変化」という大小関係そのものであり、その向きは
+// Miller et al. 2018 の SEM だけでも支持される。数値が後で訂正されても
+// 「単発2点の差を進捗と呼ばない」という設計判断は変わらない。
+// 一次文献が特定でき次第、著者・年に置き換えること。
+//
+// したがって:
 // - 単発の記録2点を比べて「進捗」と言わない(js/recordTab.js の bodyDiff は開始比較の
 //   参考値であり、このモジュールの trend とは別物)。
 // - 8〜12週の窓・3点移動平均を必須にし、条件を満たさなければ null を返す
@@ -21,6 +32,8 @@
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const MS_PER_DAY = 24 * 3600 * 1000;
+// 【設計上の判断】1ヶ月の日数。グレゴリオ暦の平均年長 365.2425 日を12で割った値。
+// 「月あたりの増加ペース」を日数から換算するためだけに使う。
 const DAYS_PER_MONTH = 30.4368; // 365.2425/12
 
 function toNum(v) {
@@ -69,6 +82,8 @@ function centeredRollingAverage3(values) {
 // MIN_RAW_RECORDS = 4: 3点移動平均が1点でも出るには生データが3件必要だが、
 //   1点だけでは「トレンド(変化率)」を語れない。移動平均の点が2点以上出て
 //   初めて開始点・終了点の差分が取れるため、生データは最低4件必要。
+// 【設計上の判断】以下3つは文献値ではなく、測定誤差より大きな変化だけを
+// トレンドとして扱うために選んだ窓幅・最小件数である。理由は上のコメント参照。
 const MIN_WINDOW_DAYS = 56;
 const MAX_WINDOW_DAYS = 84;
 const MIN_RAW_RECORDS = 4;
@@ -188,8 +203,15 @@ export function ffmiHeadroom(ffmiValue) {
 // 得られた場合でも「このペースのまま」の楽観側と「Ogasawaraの減速を踏まえた」保守側の
 // 両方を幅として返し、単一の確信めいた月数・日付を返さない。
 // 文献レンジ(実測が無い場合のフォールバック): 初心者男性の維持カロリー下での
-// 現実的な除脂肪量増加は月0.25〜0.5kg(DXA実測データ、練習者の間で広く流布した
-// 経験則ではない)。
+// 現実的な除脂肪量増加は月0.25〜0.5kg。
+//
+// 【出典なし・実務上の仮定】この 0.25〜0.5 という具体的な数値そのものを述べた
+// 一次文献は特定できていない。DXAで実測した研究群から広く引用されるレンジだが、
+// どの研究のどの数値かを本コードは示せていない。
+// 練習者の間で流布する「初月に1kg増える」式の経験則よりは保守的な値を採っている、
+// という以上の主張はしない。実測レートが得られたら常にそちらを優先する
+// (この定数はフォールバックでしか使われない)。
+// 一次文献が特定でき次第、著者・年に置き換えること。
 export const LIT_LEAN_GAIN_MIN_KG_PER_MONTH = 0.25;
 export const LIT_LEAN_GAIN_MAX_KG_PER_MONTH = 0.5;
 // Ogasawara et al. 2011: 1レップあたりの増加ペースが15週でおよそ70%低下 → 保守的な
@@ -249,6 +271,20 @@ export function projectLeanGainMonths({ currentFfmKg, targetFfmKg, measuredRateP
 //   EA            正常 30kcal/kgFFM以上   問題 30未満、緊急 25未満
 // 男性ではRED-Sの兆候はしばしば体重計より先に内分泌・自覚症状に出るため、
 // この4指標だけで「異常なし」と請け合わない、という注記を呼び出し側の文言に必ず添えること。
+
+/**
+ * エネルギー可用性(EA)の警告域と緊急域。単位は kcal/kg FFM/日。
+ * 出典: Mountjoy et al., ACSM/AND/DC 2016 共同ポジションスタンド(RED-S)。
+ * 30 未満で相対的エネルギー不足の懸念域、25 未満はより明確な低可用性域とされる。
+ * js/energy.js の EA_FLOOR_PER_KG_FFM(30) と同じ文献に由来し、値も整合している。
+ *
+ * 【リテラルで埋め込まないこと】以前は checkRateSignals の中に 25 / 30 が
+ * 直接書かれており、ホームタブから同じ基準で判定しようとしたときに
+ * 数値を二重に持つことになった。閾値が2箇所にあると、片方だけ変更されて
+ * 画面ごとに違う判定が出る。
+ */
+export const EA_EMERGENCY_PER_KG_FFM = 25;
+export const EA_WARNING_PER_KG_FFM = 30;
 // 呼び出し側が値を持たない指標には null/undefined を渡す想定。Number(null) === 0 に
 // なってしまい「0%変化」「EA 0kcal/kgFFM」のような捏造した数値として判定されるのを防ぐため、
 // null/undefined は明示的に「データ無し」として弾いてから数値化する。
@@ -292,10 +328,10 @@ export function checkRateSignals({
 
   const ea = finiteOrNull(eaKcalPerKgFfm);
   if (Number.isFinite(ea)) {
-    if (ea < 25) {
-      problems.push({ signal: 'energyAvailability', message: `エネルギー可用性が${ea.toFixed(1)}kcal/kgFFM/日で、緊急域(25未満)です` });
-    } else if (ea < 30) {
-      problems.push({ signal: 'energyAvailability', message: `エネルギー可用性が${ea.toFixed(1)}kcal/kgFFM/日で、警告域(30未満)です` });
+    if (ea < EA_EMERGENCY_PER_KG_FFM) {
+      problems.push({ signal: 'energyAvailability', message: `エネルギー可用性が${ea.toFixed(1)}kcal/kgFFM/日で、緊急域(${EA_EMERGENCY_PER_KG_FFM}未満)です` });
+    } else if (ea < EA_WARNING_PER_KG_FFM) {
+      problems.push({ signal: 'energyAvailability', message: `エネルギー可用性が${ea.toFixed(1)}kcal/kgFFM/日で、警告域(${EA_WARNING_PER_KG_FFM}未満)です` });
     }
   }
 
@@ -306,7 +342,14 @@ export function checkRateSignals({
 // 研究が挙げる「支持できる健康目標」は14〜18%。12%を下回るとレクリエーションレベルの
 // 筋トレ愛好者にとって健康上の必然性がなく、そこに必要なエネルギー可用性の条件は
 // このユーザーのリスクプロファイル(1,200kcal/日・1,000kcal/日への削減を過去に提案)と
-// 直接衝突する。ACEとACSMの基準ですら一致しない(ACE: アスリート男性6〜13% / ACSM:
+// 直接衝突する。
+//
+// 【出典の状態】機関名(ACE / ACSM)までは辿れるが、どの版・どの年の基準表かを
+// 本コードは特定できていない。14〜18% という本アプリの採用値も、両機関のレンジが
+// 重なる区間から選んだ実務上の判断であり、どちらかの機関が「14〜18%」と
+// 述べているわけではない。版が特定でき次第、西暦を付すこと。
+//
+// ACEとACSMの基準ですら一致しない(ACE: アスリート男性6〜13% / ACSM:
 // 健康的なレンジ10〜22%)ため、単一の数値ではなく範囲として示す。
 export const HEALTHY_BODYFAT_RANGE_LOW = 14;
 export const HEALTHY_BODYFAT_RANGE_HIGH = 18;
@@ -363,6 +406,10 @@ export function bodyFatGoalTension({ targetBodyFatPct, weightKg = null, exercise
 
 // --- 表示側(js/recordTab.js)がレート信号の入力を組み立てるための補助関数 ---
 
+// 【設計上の判断】「週次の体重変化」を計算するために、直近の記録2点の間隔として
+// 許容する日数。文献値ではない。ちょうど7日の記録が揃うことは実際には稀なので、
+// 7日の前後2日(5〜9日)を週次とみなす。狭くすると計算できる日が減り、
+// 広げると「週次」と呼べない間隔まで週次として扱ってしまう。
 const WEEKLY_CHECK_MIN_DAYS = 5;
 const WEEKLY_CHECK_MAX_DAYS = 9;
 

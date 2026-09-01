@@ -1,8 +1,8 @@
-import { $, esc, toast, showTab } from './ui.js';
+import { $, esc, toast, showTab, icon } from './ui.js';
 import { recomputeGame } from './game.js';
 import { bodyweightAsOf } from './body.js';
 import { startSession } from './workoutTab.js';
-import { addItems } from './mealTab.js';
+import { addItems, openItemForm } from './mealTab.js';
 
 // 日付ビュー(カレンダーの1マスをタップして開く、選んだ日の記録一覧)。
 // stage 1 の対象はトレーニングと食事のみ。バドミントン・体組成・写真は
@@ -42,7 +42,7 @@ export function renderDayView(date, backToCalendar) {
 
   $('#tab-record').innerHTML = `
     <div class="card">
-      <button id="btnBackToCalendar">← カレンダーに戻る</button>
+      <button id="btnBackToCalendar">${icon('i-back')} カレンダーに戻る</button>
       <h2 style="margin-bottom:0">${esc(date)}</h2>
     </div>
     <div class="card">
@@ -171,7 +171,7 @@ function openAddMealDialog(date) {
   dialog.innerHTML = `
     <h2 style="margin-top:0">食事を追加（${esc(date)}）</h2>
     <div class="chips">
-      ${MEAL_SLOTS.map((s) => `<button data-slot="${s.time}">${s.label} ${s.time}</button>`).join('')}
+      ${MEAL_SLOTS.map((s) => `<button data-slot="${s.time}">${esc(s.label)} ${s.time}</button>`).join('')}
     </div>
     <button id="btnCancelAddMeal" style="margin-top:8px;width:100%">やめる</button>`;
   $('#tab-record').prepend(dialog);
@@ -191,26 +191,27 @@ function openAddMealDialog(date) {
   });
 }
 
-/** js/mealTab.js の openManualDialog と同じprompt方式。past-date版として日時を明示する */
+/**
+ * 過去日の食事を1品追加する。js/mealTab.js の openItemForm(自前のフォーム)を
+ * そのまま使い、日付だけを明示する。
+ *
+ * 【なぜ prompt() をやめたか】以前はここで prompt() を3連続で出していた。
+ * ブラウザ標準ダイアログはボタン寸法をアプリが制御できず、汗ばんだ手で立ったまま
+ * 操作するという前提と正面から衝突する。加えて、3回連続で出るということは
+ * 1品追加するのに3回の入力とOK/キャンセルの判断を強いるということで、
+ * 「1タップで1品追加できる」(R4.7.4)という設計とも矛盾していた。
+ * 既に同等のフォームが js/mealTab.js にあったので、それを使い回す。
+ */
 function promptAndAddMeal(date, time) {
-  const name = prompt('品目名');
-  if (!name) return;
-  // prompt はキャンセルで null を返す。Number(null) は 0 になり「キャンセル＝0kcalで記録」
-  // という意図しない挙動になるため、null は数値変換する前に中断として扱う
-  // (js/mealTab.js の openManualDialog と同じガード)。
-  const kcalRaw = prompt('カロリー(kcal)', '0');
-  if (kcalRaw === null) return;
-  const proteinRaw = prompt('タンパク質(g)', '0');
-  if (proteinRaw === null) return;
-  const kcal = Number(kcalRaw);
-  const protein = Number(proteinRaw);
-  if (Number.isNaN(kcal) || Number.isNaN(protein)) {
-    toast('数値が読めませんでした');
-    return;
-  }
-  const saved = addItems([{ name, kcal, protein }], 'manual', `${date}T${time}`);
-  if (saved) {
-    toast(`${name} を追加`);
-    renderDayView(date, onBack);
-  }
+  openItemForm({
+    title: `${date} ${time} の食事を追加`,
+    hostSelector: '#tab-record',
+    onSave: ({ name, kcal, protein, fat, carb }) => {
+      const saved = addItems([{ name, kcal, protein, fat, carb }], 'manual', `${date}T${time}`);
+      if (saved) {
+        toast(`${name} を追加`);
+        renderDayView(date, onBack);
+      }
+    }
+  });
 }

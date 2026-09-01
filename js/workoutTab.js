@@ -1,7 +1,8 @@
 import { $, onShow, toast, vibrate, todayStr, newId, esc, icon } from './ui.js';
 import { nextProgram, calcVolume, lastSetFor, isPB, updateBests, restorableSession, programStatus } from './workout.js';
 import { addWorkoutXp, checkBadges, BADGES, calcStreak } from './game.js';
-import { currentBodyweight } from './body.js';
+import { bodyweightAsOf } from './body.js';
+import { renderStatusBar } from './mealTab.js';
 
 const PROGRAM_NAMES = { A: '胸・肩・三頭', B: '背中・二頭', C: '脚・腹' };
 const REST_SECONDS = 90;
@@ -182,7 +183,7 @@ function programDaysLabel(status) {
 
 function renderProgramChip(status) {
   const selected = status.program === session.program;
-  const mark = status.recommended ? '⟳ ' : '';
+  const mark = status.recommended ? icon('i-rotate') + ' ' : '';
   return `<button class="${selected ? 'primary' : ''}" data-act="switch-program" data-program="${status.program}">${mark}${status.program} ${programDaysLabel(status)}</button>`;
 }
 
@@ -301,7 +302,9 @@ function recordSet(btn, exId, weight, reps) {
 function updateVolume() {
   const el = $('#sessionVolume');
   if (!el) return;
-  const bodyweight = currentBodyweight(store.get('body'), store.get('profile'));
+  // バックデート入力のときは「その日時点の体重」を使う。
+  // 保存時(finishSession)と同じ基準でなければ、画面の数字と実際に保存される値が食い違う。
+  const bodyweight = bodyweightAsOf(store.get('body'), session.date, store.get('profile'));
   el.textContent = Math.round(calcVolume(session.sets, { exercises: store.get('exercises'), bodyweight }));
 }
 
@@ -347,7 +350,12 @@ function finishSession() {
   }
   const workouts = store.get('workouts');
   const exercises = store.get('exercises');
-  const bodyweight = currentBodyweight(store.get('body'), store.get('profile'));
+  // 「今の体重」ではなく「そのワークアウト日時点の体重」を使う。
+  // 日付ビュー(js/dayView.js)から過去日の記録を入れられるため、
+  // currentBodyweight だと 3ヶ月前のチンニングを今の体重で計算してしまう。
+  // js/workout.js の migrateHistoricalVolume は bodyweightAsOf を使っており、
+  // 新規保存と移行済みデータで基準が食い違っていた。
+  const bodyweight = bodyweightAsOf(store.get('body'), session.date, store.get('profile'));
   const volume = calcVolume(session.sets, { exercises, bodyweight });
   workouts.push({
     id: newId('w'),
@@ -403,4 +411,10 @@ function finishSession() {
   // 次回起動時に restorableSession が古いものとして破棄する。
   try { store.set('session', EMPTY_SESSION); } catch { /* 無視してよい */ }
   renderWorkoutTab();
+  // トレーニングを保存すると直近7日の運動消費(js/energy.js の dailyExerciseKcal)が
+  // 増え、EAフロア(30 × FFM + 運動消費)が上がる。つまり「今日はもっと食べないと
+  // いけない」状態に変わったということなので、ステータスバーを描き直して
+  // 新しい下限を反映する。ここを呼ばないと、運動した日ほど古い(緩い)フロアの
+  // まま表示され続ける。
+  renderStatusBar();
 }

@@ -40,6 +40,23 @@ function blobToBase64(blob) {
 }
 
 async function callGeminiRaw(prompt, blob, apiKey) {
+  // 【送信できるのは「今この操作で選ばれたファイル」だけ】
+  //
+  // このモジュールは任意の Blob を受け取れる形をしていた。「体の進捗写真は
+  // ここを通らない」という保証は、呼び出し側がうっかり渡さないことだけに
+  // 依存しており、ocr.js 側には門が無かった。import を1行足せば成立する距離にある。
+  //
+  // 食事写真・レシート・InBody結果紙はいずれも <input type="file"> から来るため
+  // File インスタンスである。一方、体の進捗写真は js/photos.js が canvas.toBlob で
+  // 作って IndexedDB に保存した素の Blob で、File ではない。
+  // File だけを受け付ければ、「保存済みの画像を送る」という経路が型で塞がる。
+  //
+  // 将来ここで圧縮してから送りたくなった場合は、File のまま扱うか、
+  // この検査を「利用者が今選んだファイルであること」を示す別の手段に
+  // 置き換えること。検査ごと外してはならない(scripts/verify-spec.mjs の R2.7.6)。
+  if (!(blob instanceof File)) {
+    throw new OcrError('送信できるのは、その場で選択した画像ファイルだけです');
+  }
   if (!apiKey) throw new OcrError('APIキーが設定されていません');
   if (!navigator.onLine) throw new OcrError('オフラインのため解析できません');
 

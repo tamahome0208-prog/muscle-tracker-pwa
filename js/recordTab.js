@@ -1,12 +1,12 @@
 import { $, onShow, todayStr, icon, esc } from './ui.js';
 import { weeklyVolume, weekKey, previousWeekKey, weekFeasibility } from './workout.js';
-import { bodySeries, bodyDiff, latestBody, currentBodyweight } from './body.js';
+import { bodySeries, bodyDiff, latestBody, currentBodyweight, bodyweightAsOf } from './body.js';
 import { radarData, BADGES } from './game.js';
 import { loadChartJs, drawVolumeChart, drawBodyChart, drawRadarChart } from './charts.js';
 import { initDayView, renderDayView } from './dayView.js';
-import { dayTotals } from './nutrition.js';
+import { dayTotals, isDayOver } from './nutrition.js';
 import { buildCalendarWeeks, WEEKDAY_LABELS, GYM_TARGET_PER_WEEK } from './calendarView.js';
-import { listPhotos } from './photos.js';
+import { listPhotoDates } from './photos.js';
 import {
   estimateFfmKg,
   dailyExerciseKcal,
@@ -40,7 +40,9 @@ export function initRecordTab(s) {
 export function renderRecordTab() {
   const workouts = store.get('workouts');
   const badminton = store.get('badminton');
-  const weeks = weeklyVolume(workouts);
+  // volume がスタンプされていない古いレコードでも自重・アシスト種目を正しく数えるため、
+  // その日時点の体重と種目マスタを渡す(js/workout.js の weeklyVolume 参照)。
+  const weeks = weeklyVolume(workouts, (w) => ({ exercises: store.get('exercises'), bodyweight: bodyweightAsOf(store.get('body'), w.date, store.get('profile')) }));
   const feasibility = weekFeasibility(workouts, todayStr());
   const game = store.get('game');
   const body = store.get('body');
@@ -59,7 +61,7 @@ export function renderRecordTab() {
       ${latest ? `<div class="muted">最新 ${latest.date}: 体重${latest.weight}kg / 筋肉${latest.muscle}kg / 体脂肪${latest.fatPct}%${
           Number.isFinite(Number(latest.waistCm)) && Number(latest.waistCm) > 0 ? ` / 腰囲${latest.waistCm}cm` : ''
         }</div>
-      <div class="muted">開始比: 体重${fmt(diff.weight)}kg / 筋肉<span class="up">${fmt(diff.muscle)}kg</span> / 体脂肪${fmt(diff.fatPct)}%</div>`
+      <div class="muted">開始比（記録1点目との単純差。測定誤差より小さい変化はトレンドではありません）: 体重${fmt(diff.weight)}kg / 筋肉<span class="${changeClass(diff.muscle, true)}">${fmt(diff.muscle)}kg</span> / 体脂肪<span class="${changeClass(diff.fatPct, false)}">${fmt(diff.fatPct)}%</span></div>`
         : '<p class="muted">体組成の記録がありません。ホームから登録してください。</p>'}
     </div>
     <div class="card">
@@ -83,8 +85,8 @@ export function renderRecordTab() {
         // game.js の checkBadges と同じガードを置き、壊れていても記録タブ全体を落とさない
         const ownedBadges = Array.isArray(game.badges) ? game.badges : [];
         const owned = ownedBadges.includes(b.id);
-        return `<div class="ex"><div class="ex-head"><span class="ex-name">${owned ? icon('i-crest') + ' ' + b.name : icon('i-crest-locked') + ' ???'}</span></div>
-          <div class="muted">${owned ? b.desc : '未解放'}</div></div>`;
+        return `<div class="ex"><div class="ex-head"><span class="ex-name">${owned ? icon('i-crest') + ' ' + esc(b.name) : icon('i-crest-locked') + ' ???'}</span></div>
+          <div class="muted">${owned ? esc(b.desc) : '未解放'}</div></div>`;
       }).join('')}
     </div>`;
 
@@ -127,6 +129,23 @@ function onRecordTabClick(e) {
 
 function fmt(n) {
   return (n >= 0 ? '+' : '') + n.toFixed(1);
+}
+
+/**
+ * 変化量に付ける色クラスを返す。符号ではなく「目的に対して良い向きか」で決める。
+ *
+ * 【なぜ必要か】以前は筋肉量の差分に class="up"(緑) を無条件で付けていたため、
+ * 筋肉が1.5kg減っていても「-1.5kg」が成功色で表示されていた。
+ * 目的から遠ざかる変化を成功色で見せるのは、記録アプリとして最も避けるべき誤報。
+ *
+ * goodWhenPositive: 増加が目的に近づく向きなら true(筋肉量)、
+ * 減少が近づく向きなら false(体脂肪率)。0 と非数値は色を付けない
+ * (測定誤差の範囲で、良し悪しを断定できないため)。
+ */
+function changeClass(n, goodWhenPositive) {
+  const v = Number(n);
+  if (!Number.isFinite(v) || v === 0) return '';
+  return (v > 0) === goodWhenPositive ? 'up' : 'down';
 }
 
 /**
@@ -180,14 +199,26 @@ function renderGoalCard() {
   // 連続低下を近似として使う。進行中(まだ終わっていない)今週を「低下」として
   // 数えないよう、weekFeasibility で今週が未達なら除外する(js/recordTab.js の
   // weekSummary と同じ考え方)。
-  const weeks = weeklyVolume(workouts);
+  // volume がスタンプされていない古いレコードでも自重・アシスト種目を正しく数えるため、
+  // その日時点の体重と種目マスタを渡す(js/workout.js の weeklyVolume 参照)。
+  const weeks = weeklyVolume(workouts, (w) => ({ exercises: store.get('exercises'), bodyweight: bodyweightAsOf(store.get('body'), w.date, store.get('profile')) }));
   const feasibility = weekFeasibility(workouts, today);
   const volumesForStrength = (feasibility && feasibility.remaining > 0 ? weeks.slice(0, -1) : weeks).map((w) => w.volume);
   const fallingWeeks = consecutiveFallingWeeks(volumesForStrength);
   const weightWeeklyPctChange = recentWeeklyWeightPctChange(body, today);
   const ffmChangeKgOver8Weeks = trend ? trend.ffmKg.deltaKg : null;
   const todayTotals = dayTotals(meals, today);
-  const eaKcalPerKgFfm = todayTotals.kcal > 0 ? energyAvailability(todayTotals.kcal, exerciseKcal, currentFfmKg) : null;
+  // EA(エネルギー可用性)は「その日の総摂取」に対する指標なので、日中に評価すれば
+  // 必ず低く出る。朝プロテインだけの午前中に記録タブを開くと EA≈2kcal/kgFFM/日 と
+  // なり checkRateSignals が「緊急域(25未満)」を表示するが、これは実態ではなく
+  // 単に日がまだ終わっていないだけである。
+  // js/nutrition.js の achievement() が dayOver で danger を抑止しているのと
+  // 同じ時刻ポリシーをここでも適用する。2つの安全装置が別々の時刻ポリシーを持つと、
+  // 同じ日の同じデータに対して片方は警告し片方は警告しないという矛盾が起きる。
+  const dayOver = isDayOver(new Date().getHours(), profile.dayOverHour);
+  const eaKcalPerKgFfm = dayOver && todayTotals.kcal > 0
+    ? energyAvailability(todayTotals.kcal, exerciseKcal, currentFfmKg)
+    : null;
 
   const problems = checkRateSignals({
     weightWeeklyPctChange,
@@ -204,10 +235,10 @@ function renderGoalCard() {
 
   const ffmLabel = ffmEstimated ? `${currentFfmKg.toFixed(1)}kg(推定)` : `${currentFfmKg.toFixed(1)}kg`;
 
-  const progressBlock = `<p>FFM(除脂肪量): 現在 <strong>${ffmLabel}</strong> → 目標 ${goal.targetFfmKg.toFixed(1)}kg
+  const progressBlock = `<p>FFM(除脂肪量): 現在 <strong>${ffmLabel}</strong> / 目標 ${goal.targetFfmKg.toFixed(1)}kg
       <span class="muted">(残り${progress.ffmKg.remainingKg >= 0 ? '+' : ''}${progress.ffmKg.remainingKg.toFixed(1)}kg)</span></p>
     ${progress.bodyFatPct
-      ? `<p>体脂肪率: 現在 <strong>${progress.bodyFatPct.current.toFixed(1)}%</strong> → 目標 ${progress.bodyFatPct.target.toFixed(1)}%
+      ? `<p>体脂肪率: 現在 <strong>${progress.bodyFatPct.current.toFixed(1)}%</strong> / 目標 ${progress.bodyFatPct.target.toFixed(1)}%
           <span class="muted">(残り${progress.bodyFatPct.remainingPct >= 0 ? '+' : ''}${progress.bodyFatPct.remainingPct.toFixed(1)}pt)</span></p>`
       : ''}`;
 
@@ -289,10 +320,10 @@ function renderEnergyCard() {
   const currentEA = hasFfm && todayTotals.kcal > 0 ? energyAvailability(todayTotals.kcal, exerciseKcal, ffmKg) : null;
 
   const maintenanceBlock = maintenance.method === 'insufficient'
-    ? `<p class="muted">推定維持カロリー: データ不足のため算出できません。${maintenance.note}</p>`
+    ? `<p class="muted">推定維持カロリー: データ不足のため算出できません。${esc(maintenance.note)}</p>`
     : `<p>推定維持カロリー: <strong>${maintenance.kcal}kcal</strong>
         (${maintenance.method === 'trend' ? '直近の体重トレンドからの実測ベース推定' : '予測式によるおおまかな出発点の推定(実測ではありません)'})</p>
-       <p class="muted">${maintenance.note}</p>`;
+       <p class="muted">${esc(maintenance.note)}</p>`;
 
   const ffmLabel = ffmEstimated ? `${ffmKg.toFixed(1)}kg(推定)` : `${ffmKg.toFixed(1)}kg`;
   const ffmEstimatedNote = ffmEstimated
@@ -301,22 +332,37 @@ function renderEnergyCard() {
         ホームからInBodyを記録すると、以降は実測FFMに切り替わります。</p>`
     : '';
 
-  const eaBlock = hasFfm
+  // 運動消費が不明(体重未記録)なら、EAフロアもEA自体も計算できない。
+  // Math.round(null) は 0 になるため、ガードしないと「運動消費(0kcal/日)」という
+  // 実測のように見える嘘の数値が表示される。
+  const eaBlock = !hasFfm
+    ? '<p class="muted">体重が記録されていないため、EAフロア・現在のEAは計算できません。</p>'
+    : exerciseKcal === null
     ? `${ffmEstimatedNote}
+       <p class="muted">体重が記録されていないため、運動量を反映したEAフロア(摂取量の下限)を計算できません。
+        設定タブで体重を登録するか、ホームからInBodyを記録してください。</p>`
+    : `${ffmEstimatedNote}
        <p>EAフロア(警告ライン): <strong>${Math.round(floor)}kcal</strong>
         <span class="muted">= 30 × FFM(${ffmLabel}) + 運動消費(${Math.round(exerciseKcal)}kcal/日)</span></p>
        <p>EA最適ライン: <strong>${Math.round(optimal)}kcal</strong>
         <span class="muted">= 45 × FFM + 運動消費</span></p>
        ${currentEA !== null
          ? `<p>今日のEA: <strong>${currentEA.toFixed(1)} kcal/kg FFM/日</strong>
-             <span class="muted">= (摂取${Math.round(todayTotals.kcal)} − 運動${Math.round(exerciseKcal)}) / FFM${ffmLabel}</span></p>`
+             <span class="muted">= (摂取${Math.round(todayTotals.kcal)} − 運動${Math.round(exerciseKcal)}) / FFM${ffmLabel}</span></p>
+            ${todayTotals.alcoholKcal > 0
+              ? `<p class="muted">うち発泡酒などのアルコール由来: ${Math.round(todayTotals.alcoholKcal)}kcal
+                  （摂取エネルギーの${Math.round((todayTotals.alcoholKcal / todayTotals.kcal) * 100)}%）。
+                  EAは「総摂取エネルギー」で定義されるため、この分もEAの分子に含めています(ACSM/AND/DC 2016の定義に合わせるため。
+                  除外すると文献の30/45という基準値と比較できない数字になります)。
+                  ただしアルコール由来のエネルギーは筋タンパク質の合成には使われないので、
+                  同じEAでも食事から摂った場合と同等ではありません。</p>`
+              : ''}`
          : '<p class="muted">今日はまだ食事記録が無いため、今日のEAはまだ計算できません。</p>'}
        <p class="muted">EA 30 kcal/kg FFM/日はACSM/AND/DC 2016の共同ポジションスタンドが根拠の警告ラインで、
         「下回った瞬間に何かが壊れる崖」ではありません。この閾値は元々女性のデータから
         導かれたもので、男性についてはより低く・より不確実な値しか根拠が無い
         (参考: Koehler et al. 2016は4日間15でもテストステロンの有意な変化なし)ため、
-        保守的な目安として使っています。</p>`
-    : '<p class="muted">体重が記録されていないため、EAフロア・現在のEAは計算できません。</p>';
+        保守的な目安として使っています。</p>`;
 
   return `<h2 style="margin-top:0">エネルギー可用性(EA)</h2>
     ${maintenanceBlock}
@@ -421,8 +467,9 @@ function renderCalCell(day) {
 async function fillCalendarPhotos(workouts, badminton) {
   let photoDates;
   try {
-    const photos = await listPhotos();
-    photoDates = new Set(photos.map((p) => p?.date).filter((d) => typeof d === 'string'));
+    // 日付だけを受け取る。写真のBlobをこのモジュールのスコープに入れない
+    // (js/photos.js の listPhotoDates 参照)。
+    photoDates = await listPhotoDates();
   } catch (err) {
     console.warn('写真の読み込みに失敗しました(カレンダーの写真マークは表示されません):', err);
     return;

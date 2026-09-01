@@ -1,5 +1,5 @@
 import { createStore } from './store.js';
-import { initTabs, todayStr, esc } from './ui.js';
+import { initTabs, refreshCurrentTab, todayStr, esc } from './ui.js';
 import { initMealTab } from './mealTab.js';
 import { initWorkoutTab } from './workoutTab.js';
 import { initPhotoTab, stopCamera } from './photoTab.js';
@@ -208,16 +208,18 @@ async function boot() {
     console.error('store.validate() に失敗しました:', err);
   }
 
-  try {
-    await loadSeed();
-  } catch (err) {
-    // loadSeed() が失敗しても(キャプティブポータル等)、それだけを理由に
-    // initTabs() をスキップしてはならない。以前はここで例外が外側の catch まで
-    // 伝播し、initTabs() が一度も呼ばれずタブボタンのイベントリスナーが1つも
-    // 付かないまま終わっていた。ローカルのデータ自体は無事なので、通常起動を続ける。
-    console.warn('起動時のデータ読み込みに失敗しました。今回はスキップして通常起動します:', err);
-  }
-
+  // 【重要・順序】画面を先に立ち上げてから、種データの取得を待つ。
+  //
+  // 以前は await loadSeed() を initTabs() より前に置いていた。loadSeed() は
+  // data/exercises.json と data/foods.json を fetch し、それらは sw.js の
+  // ネットワーク優先ハンドラを通る。機内モード(fetch が即座に reject する)なら
+  // catch に落ちて先へ進めるが、ジムの不安定Wi-Fiのように「TCPは張れるが応答が
+  // 返らない」半死の回線では fetch は失敗せず待ち続ける。その間 initTabs() に
+  // 到達しないため、タブボタンにイベントリスナーが1つも付かず、
+  // 「6つのタブがあるのに何を押しても反応しないアプリ」になる。
+  // しかも移行フラグは失敗時に立てない設計なので、この状態は起動のたびに再発する。
+  //
+  // ローカルのデータだけで全タブは描画できる。ネットワークを待つ理由が無い。
   try {
     initMealTab(store);
     initWorkoutTab(store);
@@ -252,6 +254,17 @@ async function boot() {
           <p class="muted">詳細: ${esc(err?.message ?? String(err))}</p>
         </div>`;
     }
+  }
+
+  // 種データの取得と移行は、画面が操作可能になった後で待つ。
+  // 失敗しても(キャプティブポータル・半死の回線・オフライン)ローカルのデータは
+  // 無事なので、警告をコンソールに残すだけで通常の利用を続けられる。
+  // 成功した場合は表示中のタブを描き直して取得結果を反映する。
+  try {
+    await loadSeed();
+    refreshCurrentTab();
+  } catch (err) {
+    console.warn('起動時のデータ読み込みに失敗しました。今回はスキップして通常起動します:', err);
   }
 }
 

@@ -69,6 +69,9 @@ h2 { font-size: 16px; margin: 16px 0 8px; }
 .big { font-size: 30px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
 .muted { color: var(--muted); font-size: 13px; }
 .up { color: var(--ok); }
+/* 目的から遠ざかる向きの変化(筋肉量の減少・体脂肪率の上昇)に使う。
+   .up と対で使い、符号ではなく「目的に対して良いか悪いか」で色を決める。 */
+.down { color: var(--danger); }
 
 /* カード階層。今日やること(ホームの1枚目)を主役に、連続週数・筋肉が落ち始めるまで・
    部位レベルは控えめにする。新しい色相は増やさず、サイズ・太さ・余白だけで差をつける
@@ -95,6 +98,21 @@ h2 { font-size: 16px; margin: 16px 0 8px; }
 .torso-layer { position: absolute; inset: 0; width: 100%; height: 100%; }
 .torso-label { font-size: 11px; margin-top: 4px; text-align: center; white-space: nowrap; }
 
+/* 【タップ対象の寸法基準・出典】
+   このアプリが採る基準は次の3段階。数字の出どころを明示しておかないと、
+   後から「44で足りるのでは」「24でも規格上は通る」と緩められる。
+
+   - 48×48 CSS px: 通常の操作可能要素。Material Design の推奨最小タッチターゲット
+     (48dp)に合わせる。W3C の規格上の最低線ではなく、実機での誤タップを減らす目的。
+   - 56×56 CSS px: ✓セットボタンだけ。このアプリで最も連打され、かつ汗ばんだ手で
+     立ったまま押される唯一のコントロールなので、48より一段大きくする。
+   - 44×44 CSS px: カレンダーの日セル(.cal-cell)。WCAG 2.1 SC 2.5.5
+     Target Size (Enhanced, Level AAA) の 44×44。375px幅で7列＋週次回数列を
+     並べる制約から48は物理的に取れないため、ここだけ一段緩い基準を採る。
+     これは「記録するボタン」ではなく詳細画面への遷移なので、誤タップの代償が小さい。
+
+   参考: WCAG 2.2 SC 2.5.8 Target Size (Minimum, Level AA) は 24×24 CSS px。
+   本アプリはこれを大きく上回る基準を自ら課している。 */
 button { font: inherit; color: inherit; background: #202024;
   border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px;
   min-height: 48px; }
@@ -113,8 +131,9 @@ button:active { transform: scale(.97); }
 /* ＋／－の重量・回数ステッパー。汗ばんだ手でも押しやすい最低48pxを確保 */
 .ex-ctrl button:not(.setbtn) { min-width: 48px; min-height: 48px; font-size: 18px; font-weight: 700; }
 
-/* ✓ セットボタン。このアプリで最も連打されるコントロールなので
-   最低限の44pxではなく56px角＋余白多めにして誤タップを避ける */
+/* ✓ セットボタン。このアプリで最も連打されるコントロールなので、
+   通常の48px(Material 48dp)ではなく56px角＋余白多めにして誤タップを避ける。
+   寸法基準の出典は上の button ルールのコメントを参照。 */
 .setbtn { width: 56px; height: 56px; border-radius: 28px; font-size: 20px;
   margin: 4px 8px 4px 0; border: 2px solid var(--muted);
   display: flex; align-items: center; justify-content: center; }
@@ -133,7 +152,13 @@ button:active { transform: scale(.97); }
    gapを持たせず border で列を区切ることで、375px幅でも横スクロールせずに収まる
    (main/.cardのpaddingを差し引いた幅を7等分すると1列あたり45px前後、8列目は
    "3/3"が入る幅だけ確保すれば足りるので auto で狭くする)。 */
-.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr) auto; font-size: 11px; }
+/* カードの左右パディング(12px)へはみ出させて、日セルの幅を確保する。
+   375px幅では 7列 + 週次回数列 を 325px で分けるため1セル42.7pxしか取れず、
+   タップ対象として狭すぎた。負のマージンで両側8pxずつ広げると 45.0px になる
+   (WCAG 2.1 SC 2.5.5 Target Size (Enhanced) の 44×44 CSS px を満たす)。
+   ここを 48px まで広げるには回数列を捨てるか横スクロールを許すしかなく、
+   どちらも失うものの方が大きい。css/style.css の .cal-count も参照。 */
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr) auto; font-size: 11px; margin: 0 -8px; }
 .cal-wd { text-align: center; padding: 4px 0; color: var(--muted); font-weight: 600; }
 .cal-wd-count { padding-left: 4px; }
 /* 月境界のラベル。1/-1 で8列ぶん丸ごと使い、その週の直前に1行差し込む。

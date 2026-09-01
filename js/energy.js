@@ -28,6 +28,8 @@
 //
 // エネルギー消費/RMR式の出典は各関数のコメントに個別に記す。
 
+// 【製品仕様ではなく物理定数】1 kcal = 4.184 kJ(熱化学カロリーの定義値)。
+// 研究由来の推定値ではないので、この値が将来変わることはない。
 const KCAL_PER_KJ = 4.184;
 
 /** ffmKg等、数値化できない/0以下の入力を弾く共通ガード。無効なら null を返す。 */
@@ -167,15 +169,23 @@ const MINUTES_PER_SET = 2.5;
  * (js/workout.js の weeklyVolume 等と同じ方針で)例外を投げず読み飛ばす。
  *
  * weightKg はMETベースの換算に必要な現在体重(js/body.js の currentBodyweight 等で
- * 呼び出し側が用意する)。不正・未指定なら0を返す(運動消費不明で計算を止めるより、
- * EA計算側で「運動0」として安全側に振れる方を優先する)。
+ * 呼び出し側が用意する)。
+ *
+ * 【不正・未指定なら null を返す】以前はここで 0 を返し、コメントには
+ * 「運動消費不明で計算を止めるより、EA計算側で『運動0』として安全側に振れる方を
+ * 優先する」と書いていた。これは向きが逆である。
+ * EAフロアは 30 × FFM + 運動消費kcal なので、運動消費が 0 として扱われると
+ * フロアが運動分だけ低くなり、警告は緩む。週5日トレーニングしている人の
+ * フロアを「運動していない人のフロア」に置き換えることになる。
+ * 分からないときは緩めるのではなく、判定を保留する(呼び出し側は null を
+ * 「不明」として扱い、下限判定を行わないこと。js/nutrition.js の achievement 参照)。
  */
 export function dailyExerciseKcal(workouts, badminton, todayStr, weightKg) {
   const weight = positiveOrNull(weightKg);
-  if (weight === null || typeof todayStr !== 'string') return 0;
+  if (weight === null || typeof todayStr !== 'string') return null;
 
   const windowDates = new Set(lastNDates(todayStr, 7));
-  if (windowDates.size === 0) return 0;
+  if (windowDates.size === 0) return null;
 
   let total = 0;
 
@@ -209,6 +219,9 @@ export function dailyExerciseKcal(workouts, badminton, todayStr, weightKg) {
 export function energyAvailability(intakeKcal, exerciseKcal, ffmKg) {
   const ffm = positiveOrNull(ffmKg);
   if (ffm === null) return null;
+  // eaFloorKcal と同じ規約: null は「運動消費不明」。0 として扱うとEAが実際より
+  // 高く出てしまい、緊急域の判定が甘くなる。
+  if (exerciseKcal === null) return null;
   const intake = Number(intakeKcal);
   const exercise = Number(exerciseKcal);
   const safeIntake = Number.isFinite(intake) ? intake : 0;
@@ -230,6 +243,11 @@ const EA_OPTIMAL_PER_KG_FFM = 45; // 同上。「これ以上ならエネルギ�
 export function eaFloorKcal(ffmKg, exerciseKcal) {
   const ffm = positiveOrNull(ffmKg);
   if (ffm === null) return null;
+  // exerciseKcal === null は「運動消費が計算できなかった」の明示的な合図
+  // (dailyExerciseKcal が体重不明時に返す)。0 として足し込むとフロアが
+  // 運動分だけ低くなるため、フロア自体を「計算できない」として返す。
+  // undefined(未指定)は従来どおり 0 として扱う(後方互換)。
+  if (exerciseKcal === null) return null;
   const exercise = Number(exerciseKcal);
   return EA_FLOOR_PER_KG_FFM * ffm + (Number.isFinite(exercise) ? exercise : 0);
 }
@@ -253,9 +271,17 @@ const SEDENTARY_ACTIVITY_FACTOR = 1.2;
  * 体組成・食事のトレンドデータが無い/不十分なときの、維持カロリーの「出発点」推定。
  * RMR(FFM既知ならCunningham、不明ならten Haaf)× 座位活動係数 + 実測の運動消費。
  * これはあくまで予測式であり、後述の estimateMaintenance が優先する「体重トレンドからの
- * 実測ベース推定」に取って代わるものではない(このアプリのユーザーの体組成計測記録では、
- * 予測式は実測よりも500〜700kcal/日ほど高く出る傾向があり、申告摂取量の過小評価が
- * 典型的な原因とされる。ACSM 2016 参照)。
+ * 実測ベース推定」に取って代わるものではない。
+ *
+ * 【出典なし・実務上の仮定】「予測式は実測より500〜700kcal/日ほど高く出る」という
+ * この幅そのものを述べた一次文献は特定できていない。申告摂取量の過小評価が
+ * 予測式と実測の乖離の典型的な原因であること自体は広く指摘されている(ACSM 2016)が、
+ * 500〜700 という具体的な数値は本コードが示せる文献に基づいていない。
+ *
+ * ただしこの数値は計算に使っていない。予測式の結果を「あくまで出発点の推定であり
+ * 実測ではない」と画面に明示する根拠として書かれているだけで、乖離の向き
+ * (予測式の方が高く出る)が合っていれば設計判断は変わらない。
+ * 一次文献が特定でき次第、著者・年に置き換えること。
  */
 export function equationMaintenanceEstimate({ ffmKg, weightKg, heightM, ageYears, isMale, exerciseKcalPerDay = 0 } = {}) {
   const ffm = positiveOrNull(ffmKg);
@@ -263,6 +289,10 @@ export function equationMaintenanceEstimate({ ffmKg, weightKg, heightM, ageYears
     ? rmrCunningham(ffm)
     : rmrTenHaaf({ weightKg, heightM, ageYears, isMale });
   if (!Number.isFinite(rmr) || rmr <= 0) return null;
+  // eaFloorKcal と同じ規約: null は「運動消費不明」。0 として足すと維持カロリーが
+  // 運動分だけ低く出て、「これだけ食べれば維持できる」という数字が実際より小さくなる。
+  // これも警告が緩む向きの誤りなので、推定そのものを行わない。
+  if (exerciseKcalPerDay === null) return null;
   const exercise = Number(exerciseKcalPerDay);
   return rmr * SEDENTARY_ACTIVITY_FACTOR + (Number.isFinite(exercise) ? exercise : 0);
 }
@@ -327,10 +357,20 @@ function dateDiffDays(fromStr, toStr) {
 // - TREND_MIN_LOGGED_DAYS = 10: 14日中70%(10日)以上に食事記録が無いと、平均摂取が
 //   「記録した日だけ食べた特別な日」に偏っている可能性が高く、代表値として使えない。
 // - TREND_MIN_BODY_RECORDS = 2: 体重変化を計算するには最低2点(期間の始点・終点)が必要。
+// 【設計上の判断】以下3つは文献から引いた値ではなく、このアプリの記録頻度に
+// 合わせて決めた窓幅・最小件数である。上のコメントに理由を書いてある。
 const TREND_SPAN_DAYS = 14;
 const TREND_MIN_LOGGED_DAYS = 10;
 const TREND_MIN_BODY_RECORDS = 2;
-const KCAL_PER_KG_BODYWEIGHT = 7700; // 体重1kgの増減に相当するエネルギー収支の伝統的な概算値
+// 体重1kgの増減に相当するエネルギー収支の伝統的な概算値。
+// 出典: Wishnofsky 1958 の「体脂肪1ポンド ≒ 3,500kcal」をkg換算したもの。
+// 【この値の限界を承知で使う】この経験則は、体重が減るにつれて代謝も落ちること・
+// 減量時に失われるのが脂肪だけではないことを織り込んでおらず、長期の減量では
+// 実際より大きな減少を予測することが知られている(Hall 2008、Thomas et al. 2014 等の
+// 批判がある)。ここでは14日程度の短期窓で「摂取と体重変化から維持カロリーを逆算する」
+// 用途にしか使っておらず、その範囲では実用上の誤差に収まる。
+// 長期予測に流用してはならない。
+const KCAL_PER_KG_BODYWEIGHT = 7700;
 
 /**
  * 維持カロリーを推定する。

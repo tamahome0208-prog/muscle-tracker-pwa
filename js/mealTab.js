@@ -1,5 +1,5 @@
-import { $, onShow, toast, todayStr, nowStr, newId, esc, icon } from './ui.js';
-import { dayTotals, achievement, sortFoodsByUse, bumpFoodUse } from './nutrition.js';
+import { $, onShow, toast, todayStr, nowStr, newId, esc, icon, confirmSend } from './ui.js';
+import { dayTotals, achievement, sortFoodsByUse, bumpFoodUse, isDayOver } from './nutrition.js';
 import { isBarcodeSupported, scanJan, lookupJan } from './barcode.js';
 import { analyzeMealPhoto, analyzeReceipt, OcrError } from './ocr.js';
 import { estimateFfmKg, dailyExerciseKcal, macroTargets, estimateMaintenance, equationMaintenanceEstimate } from './energy.js';
@@ -12,6 +12,20 @@ export function initMealTab(s) {
   store = s;
   onShow('meal', renderMealTab);
   renderStatusBar();
+
+  // 【なぜ再描画が要るか】このステータスバーは EAフロア割れ(danger)を表示する
+  // 唯一の常設面だが、以前は起動時・食事の追加時・食事の削除時の3経路でしか
+  // 描き直されなかった。その結果:
+  //  - dayOver が起動時の値のまま凍る。18時に開いたまま22時になっても
+  //    「食べなさすぎ」警告は永久に出ない(トレ中は Wake Lock で画面が点いたまま)。
+  //  - todayStr() も起動時に1回しか評価されないため、日付を跨ぐと前日の合計が
+  //    今日のバーとして表示され続ける(standalone PWA は再開されることが多い)。
+  //  - 設定で目標を変えてもバーは古い目標のまま。
+  //  - トレーニングを保存して運動消費が増えても EAフロアが上がらない。
+  // アプリが前面に戻るたびに描き直せば、上4件すべてが解消する。
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') renderStatusBar();
+  });
 }
 
 /** 上部の死守2項目バーを更新する。食事を追加するたびに呼ぶ */
@@ -20,8 +34,10 @@ export function renderStatusBar() {
   const targets = profile.targets;
   const totals = dayTotals(store.get('meals'), todayStr());
   // このステータスバーは常に「今日」の集計しか表示しない(過去日を見るビューは
-  // 無い)ため、dayOver は現在時刻が20時以降かどうかだけで決まる。
-  const dayOver = new Date().getHours() >= 20;
+  // 無い)ため、dayOver は現在時刻が閾値を過ぎたかどうかだけで決まる。
+  // 閾値は profile.dayOverHour(既定22時)。20時固定だと、朝プロテイン+夕食1食の
+  // このユーザーは夕食を食べる直前に毎日必ず danger 警告を受け取ることになる。
+  const dayOver = isDayOver(new Date().getHours(), profile.dayOverHour);
 
   // EA(エネルギー可用性)フロアで下限警告を判定するため、直近のInBody記録から
   // FFM(除脂肪量)と直近7日の運動消費kcalを渡す(js/energy.js 参照)。
@@ -55,22 +71,29 @@ export function renderStatusBar() {
   setBar('#kcalFill', '#kcalValue', a.kcalPct,
     `${Math.round(totals.kcal)} / ${targets.kcalMin}〜${targets.kcalMax}`,
     totals.kcal > targets.kcalMax ? 'over' : (totals.kcal >= targets.kcalMin ? 'done' : ''));
-  // targets.alcoholMl が0(禁酒目標)だと 0/0 が NaN になり、幅が Infinity%/NaN% に
-  // 化ける。目標0のときは「1mlでも飲んだら100%」として扱う。
-  // バーの幅・over/done判定は既存どおり targets.alcoholMl(ml)基準のまま変えない
-  // (設定タブの目標入力・achievement()のalcoholOver判定を変更せずに済ませるため)。
-  // 表示するテキストだけを、全ての飲酒ガイドラインが使う単位である純アルコール(g)に
-  // 変換する(js/micronutrients.js の alcoholGrams、dayTotals が totals.alcoholG として
-  // 計算済み)。20g(500ml・5%)を「危険」と煽らないよう、ここでは数値だけを淡々と示す。
-  const alcoholPct = targets.alcoholMl > 0
-    ? (totals.alcoholMl / targets.alcoholMl) * 100
-    : (totals.alcoholMl > 0 ? 100 : 0);
-  setBar('#alcoholFill', '#alcoholValue',
-    alcoholPct,
-    `${Math.round(totals.alcoholG)}g（${totals.alcoholMl}ml）`,
-    a.alcoholOver ? 'over' : '');
+  // 【純アルコールは進捗バーを持たない】
+  // 以前はここに3本目の .bar があった。同じ太さのバーは「同じ格の管理項目」という
+  // 意味になるが、このアプリが守りたいのはタンパク質とカロリーの2つで、飲酒量は
+  // それと同格ではない。脂質・炭水化物と同じ二次表示の行へ降格する。
+  //
+  // 単位は、全ての飲酒ガイドラインが使う純アルコール(g)で示す
+  // (js/micronutrients.js の alcoholGrams、dayTotals が totals.alcoholG として計算済み)。
+  // 20g(500ml・5%)は MHLW「飲酒ガイドライン」(2024) の「節度ある適度な飲酒」の
+  // 上限そのものなので、「危険」と煽らず数値だけを淡々と示す。
+  const alcoholEl = $('#alcoholSecondary');
+  if (alcoholEl) {
+    alcoholEl.innerHTML = totals.alcoholMl > 0
+      ? `<span class="${a.alcoholOver ? 'down' : ''}">純アルコール ${Math.round(totals.alcoholG)}g`
+        + `（${totals.alcoholMl}ml / 目安 ${targets.alcoholMl}ml）</span>`
+      : '';
+  }
 
-  const warningsHtml = a.warnings.map((w) => `<div class="warn ${w.level}">${w.message}</div>`);
+  // w.message / w.level は innerHTML に入るため esc() を通す。
+  // 現在のメッセージは js/nutrition.js が数値だけから組み立てているので実害は無いが、
+  // js/ui.js の規約は「外部由来の文字列は必ず esc() を通すこと」であり、
+  // achievement() のメッセージに将来 食品名(OCR/バーコード由来 = 外部文字列)が
+  // 入った時点で XSS になる。10行下の esc(macro.notes[...]) と扱いを揃える。
+  const warningsHtml = a.warnings.map((w) => `<div class="warn ${esc(w.level)}">${esc(w.message)}</div>`);
 
   // 脂質・炭水化物はタンパク質・カロリーと違って「死守」する数値ではないため、
   // 同じ太さのバーをもう2本増やさない(このタブは筋トレの合間に見る前提の画面で、
@@ -254,7 +277,19 @@ export function addFoodById(foodId) {
   // 先に addItems を呼んでしまうと、押した食品が上位に来るのが次の描画まで
   // 遅れてしまい、「よく食べるものが1タップで届く位置に来る」という
   // このタブの存在意義そのものが体感で1回遅れて壊れる。
-  store.set('foods', bumpFoodUse(store.get('foods'), foodId));
+  // 【重要】ここが失敗しても食事の記録そのものは続けること。
+  // useCount の更新は「よく食べるものが上位に来る」ための並び順の話であり、
+  // 食事を記録するという主目的より優先度が低い。
+  // 以前はこの行が try/catch で保護されておらず、store.set が例外を投げると
+  // addFoodById 全体が中断して addItems に到達せず、
+  // 「食事が記録されないのに、失敗を知らせるトーストも出ない」状態になっていた。
+  // R4.7.4(1タップで1品追加)と R4.7.5(失敗を成功トーストで上書きしない)を、
+  // その直前の1行が無効化していた。
+  try {
+    store.set('foods', bumpFoodUse(store.get('foods'), foodId));
+  } catch {
+    console.warn('食品の使用回数を更新できませんでした（並び順が変わらないだけで、記録は続行します）');
+  }
   // food.fat/food.carb/food.fibre/food.vitaminD/food.calcium/food.salt はシード食品
   // (data/foods.json)やOCR経由で登録された食品にはあるが、旧バージョンで登録済みの
   // バーコード食品(js/main.js の foodsMacroSyncedV1/foodsMicroSyncedV1 移行の対象外)
@@ -349,7 +384,14 @@ export function renderMealTab() {
   $('#tab-meal').onclick = (e) => {
     const del = e.target.closest('[data-del]');
     if (del) {
-      store.set('meals', store.get('meals').filter((m) => m.id !== del.dataset.del));
+      // 保存に失敗したまま再描画すると、画面上は消えたのにリロードすると
+      // 戻っている、という最も分かりにくい状態になる。失敗を伝えて描き直さない。
+      try {
+        store.set('meals', store.get('meals').filter((m) => m.id !== del.dataset.del));
+      } catch {
+        toast('削除できませんでした（端末の空き容量を確認してください）');
+        return;
+      }
       renderStatusBar();
       renderMealTab();
       return;
@@ -409,21 +451,28 @@ export function renderMealTab() {
  * onSave はレコードの組み立てと保存を呼び出し側の責務として残す(mealTab.js内の
  * 通常の手入力と、未登録バーコードのマイメニュー登録とで保存先が異なるため)。
  */
-function openItemForm({ title, nameLabel = '品目名', onSave }) {
+export function openItemForm({ title, nameLabel = '品目名', onSave, hostSelector = '#tab-meal', initial = {} }) {
+  // initial: 既に分かっている値を埋めておく。バーコード照会で栄養値だけ取れて
+  // 品名が無かった場合(js/barcode.js の nameMissing)、利用者に打たせるのは
+  // 品名の1項目だけで済ませたい。
+  const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
   const dialog = document.createElement('div');
   dialog.className = 'card';
   dialog.innerHTML = `
     <h2 style="margin-top:0">${esc(title)}</h2>
-    <div class="ex-ctrl"><input type="text" id="ifName" placeholder="${esc(nameLabel)}" style="flex:1"></div>
-    <div class="ex-ctrl">カロリー <input type="number" inputmode="numeric" id="ifKcal" value="0" style="width:90px">kcal</div>
-    <div class="ex-ctrl">タンパク質 <input type="number" inputmode="decimal" id="ifProtein" value="0" style="width:90px">g</div>
-    <div class="ex-ctrl">脂質 <input type="number" inputmode="decimal" id="ifFat" value="0" style="width:90px">g</div>
-    <div class="ex-ctrl">炭水化物 <input type="number" inputmode="decimal" id="ifCarb" value="0" style="width:90px">g</div>
+    <div class="ex-ctrl"><input type="text" id="ifName" placeholder="${esc(nameLabel)}" value="${esc(initial.name ?? '')}" style="flex:1"></div>
+    <div class="ex-ctrl">カロリー <input type="number" inputmode="numeric" id="ifKcal" value="${num(initial.kcal)}" style="width:90px">kcal</div>
+    <div class="ex-ctrl">タンパク質 <input type="number" inputmode="decimal" id="ifProtein" value="${num(initial.protein)}" style="width:90px">g</div>
+    <div class="ex-ctrl">脂質 <input type="number" inputmode="decimal" id="ifFat" value="${num(initial.fat)}" style="width:90px">g</div>
+    <div class="ex-ctrl">炭水化物 <input type="number" inputmode="decimal" id="ifCarb" value="${num(initial.carb)}" style="width:90px">g</div>
     <div class="chips">
       <button id="ifSave" class="primary">保存</button>
       <button id="ifCancel">やめる</button>
     </div>`;
-  $('#tab-meal').prepend(dialog);
+  // hostSelector: どのタブへ差し込むか。日付ビュー(js/dayView.js)は #tab-record を
+  // 使い回すため、#tab-meal 固定だと画面外にダイアログが生成されて誰も気づけない。
+  $(hostSelector).prepend(dialog);
+  dialog.scrollIntoView({ block: 'center' });
 
   // このダイアログは開くたびに新しく作る使い捨てのDOMなので addEventListener でよい
   // (onclick代入が必要なのは再描画をまたいで生き続けるコンテナだけ)。
@@ -487,7 +536,35 @@ async function scanBarcode() {
   const hit = await lookupJan(jan, store.get('foods'), store.get('settings').useOpenFoodFacts);
   if (hit) {
     if (hit.source === 'openfoodfacts') {
-      store.set('foods', [...store.get('foods'), hit.food]);
+      // Open Food Facts に品名が無い商品(js/barcode.js の nameMissing)。
+      // 栄養値は取れているので、利用者に打たせるのは品名の1項目だけにする。
+      // 通信層が prompt() を出していた以前の実装をUI層へ移したもの。
+      if (hit.food.nameMissing) {
+        openItemForm({
+          title: `品名を取得できませんでした（JAN: ${hit.food.jan}）`,
+          nameLabel: '品名を入力してください',
+          initial: hit.food,
+          onSave: (values) => {
+            const food = { ...hit.food, ...values, nameMissing: false };
+            try {
+              store.set('foods', [...store.get('foods'), food]);
+            } catch {
+              toast('食品を保存できませんでした（端末の空き容量を確認してください）');
+              return;
+            }
+            addFoodById(food.id);
+          }
+        });
+        return;
+      }
+      // ここで保存に失敗すると食品マスタに入らないため、直後の addFoodById が
+      // id を見つけられず、何も起きないまま終わる（無言の失敗）。
+      try {
+        store.set('foods', [...store.get('foods'), hit.food]);
+      } catch {
+        toast('食品を保存できませんでした（端末の空き容量を確認してください）');
+        return;
+      }
     }
     addFoodById(hit.food.id);
     return;
@@ -498,7 +575,14 @@ async function scanBarcode() {
     nameLabel: '品名（次回から自動登録されます）',
     onSave: ({ name, kcal, protein, fat, carb }) => {
       const food = { id: `jan_${jan}`, jan, name, unit: '個', kcal, protein, fat, carb, useCount: 0 };
-      store.set('foods', [...store.get('foods'), food]);
+      // 保存に失敗すると直後の addFoodById が id を見つけられず、
+      // 利用者がフォームに全部入力した末に何も起きないまま終わる。
+      try {
+        store.set('foods', [...store.get('foods'), food]);
+      } catch {
+        toast('食品を保存できませんでした（端末の空き容量を確認してください）');
+        return;
+      }
       addFoodById(food.id);
     }
   });
@@ -513,6 +597,10 @@ async function pickAndAnalyze(kind) {
   input.addEventListener('change', async () => {
     const file = input.files?.[0];
     if (!file) return;
+    // 送信前に何を送るのかを見せる(js/ui.js の confirmSend)。
+    // capture="environment" はヒントに過ぎず、ギャラリー選択に切り替えられるため、
+    // 誤って体の進捗写真を選ぶ経路が実在する。
+    if (!(await confirmSend(file, kind === 'meal' ? '食事の写真' : 'レシート'))) return;
     toast('解析中...');
     const apiKey = store.get('settings').geminiKey;
     try {

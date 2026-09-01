@@ -1,4 +1,4 @@
-import { $, onShow, toast, todayStr, icon } from './ui.js';
+import { $, onShow, toast, todayStr, icon, esc } from './ui.js';
 import { ANGLES, savePhoto, listPhotos, latestByAngle, firstByAngle, toUrl, isAvailable, deletePhoto } from './photos.js';
 import { BADGES, checkBadges, calcStreak } from './game.js';
 
@@ -24,7 +24,7 @@ export async function renderPhotoTab() {
     <div class="card">
       <h2 style="margin-top:0">撮影</h2>
       <div class="chips" id="angleChips">
-        ${ANGLES.map((a) => `<button data-angle="${a.id}" class="${a.id === currentAngle ? 'primary' : ''}">${a.label}</button>`).join('')}
+        ${ANGLES.map((a) => `<button data-angle="${a.id}" class="${a.id === currentAngle ? 'primary' : ''}">${esc(a.label)}</button>`).join('')}
       </div>
       <div class="photo-stage" id="stage" style="margin-top:8px">
         <video id="cam" playsinline muted></video>
@@ -209,7 +209,15 @@ function grantCompareBadge() {
     xp: game.xp, comparedPhotos: true, badges: game.badges
   });
   if (earned.length === 0) return;
-  store.set('game', { ...game, badges: [...game.badges, ...earned] });
+  // 保存に失敗したまま「称号解放」のトーストを出すと、次回起動時に称号が
+  // 消えている(獲得した記憶だけが残る)という最も裏切りの大きい壊れ方になる。
+  // 保存できたときだけ祝う。
+  try {
+    store.set('game', { ...game, badges: [...game.badges, ...earned] });
+  } catch {
+    toast('称号を保存できませんでした（端末の空き容量を確認してください）');
+    return;
+  }
   for (const id of earned) {
     const badge = BADGES.find((b) => b.id === id);
     if (badge) toast(`称号解放「${badge.name}」`, 3000, '', 'i-crest');
@@ -227,7 +235,7 @@ async function renderTimeline() {
     : all.map((p, idx) => `
         <div class="ex">
           <div class="ex-head">
-            <span>${p.date} / ${ANGLES.find((a) => a.id === p.angle)?.label ?? p.angle}</span>
+            <span>${p.date} / ${esc(ANGLES.find((a) => a.id === p.angle)?.label ?? p.angle)}</span>
             <button data-delphoto="${p.id}">削除</button>
           </div>
           <img src="${timelineUrls[idx]}" style="width:80px;border-radius:6px" alt="">

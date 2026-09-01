@@ -138,6 +138,16 @@ button:active { transform: scale(.97); }
   margin: 4px 8px 4px 0; border: 2px solid var(--muted);
   display: flex; align-items: center; justify-content: center; }
 .setbtn.done { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+
+/* 重量の刻み切替。✓ボタンと同じ行に置くが、記録用のボタンと取り違えないよう
+   角丸を四角寄りにし、色も持たせない。文字で現在の刻みを示すので幅は内容に任せる。
+   高さは行内の他のボタンと揃え、タップ領域48pxを確保する(css/style.css の button 参照)。 */
+.stepbtn { min-height: 48px; padding: 0 12px; margin: 4px 0 4px 8px; font-size: 13px;
+  color: var(--muted); border-radius: 10px; white-space: nowrap; }
+
+/* 「Bから追加」のような、今日のプログラム外であることを示すラベル。
+   種目名の一部として読ませたいので、名前より小さく muted にする。 */
+.ex-extra { font-size: 11px; color: var(--muted); font-weight: 400; margin-left: 4px; }
 /* 自己ベスト更新時だけの金の一瞬の演出。金は「レア」に保つため他では使わない */
 .setbtn.pb { animation: pbFlourish .6s ease; border-color: var(--pb) !important;
   box-shadow: 0 0 0 3px var(--pb); }

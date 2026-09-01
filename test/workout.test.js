@@ -23,6 +23,9 @@ import {
   daysUntilDetraining,
   distinctDatesPerWeek,
   migrateHistoricalVolume,
+  WEIGHT_STEPS,
+  nextWeightStep,
+  setIndexInSession,
   PROGRAMS
 } from '../js/workout.js';
 import { bodyweightAsOf } from '../js/body.js';
@@ -331,14 +334,16 @@ test('年をまたぐ脚の日の翌日も警告する', () => {
 // startedAt(セッションを開始した暦日)が今日かどうかで判定する。date(記録対象の日付)は
 // バックデート入力では今日と一致しなくてよい。
 
+// 戻り値は既知フィールドだけを組み立て直したもので、入力と同一ではない。
+// extraExIds(追加種目)は無ければ空配列に正規化されるため、期待値にも含める。
 test('restorableSession: startedAtが今日なら(dateが過去でも)復元する', () => {
   const stored = { program: 'B', date: '2026-07-28', startedAt: '2026-07-29', sets: [{ exId: 'seated_row', weight: 30, reps: 10 }] };
-  assert.deepEqual(restorableSession(stored, '2026-07-29'), stored);
+  assert.deepEqual(restorableSession(stored, '2026-07-29'), { ...stored, extraExIds: [] });
 });
 
 test('restorableSession: dateが今日でもstartedAtが今日なら復元する(通常の当日セッション)', () => {
   const stored = { program: 'B', date: '2026-07-29', startedAt: '2026-07-29', sets: [{ exId: 'seated_row', weight: 30, reps: 10 }] };
-  assert.deepEqual(restorableSession(stored, '2026-07-29'), stored);
+  assert.deepEqual(restorableSession(stored, '2026-07-29'), { ...stored, extraExIds: [] });
 });
 
 test('restorableSession: startedAtが今日でなければ古いセッションとして復元しない', () => {
@@ -827,4 +832,87 @@ test('その日以前に体重記録が無ければ、保存時も移行時も p
 
   assert.equal(bw, 60);
   assert.equal(migrated[0].volume, savedVolume);
+});
+
+// --- 追加種目（別日のメニューを当日に足す） ---
+// 「今日はAだが背中も1種目だけやる」を可能にする。session.extraExIds に
+// 種目IDを持たせ、renderWorkoutTab が今日のプログラム＋この一覧を描画する。
+// restorableSession は既知フィールドだけを返す設計なので、ここを通さないと
+// タブを往復した瞬間に追加種目が消える。
+
+test('restorableSession: extraExIds を保持する', () => {
+  const stored = {
+    program: 'A', date: '2026-09-01', startedAt: '2026-09-01',
+    sets: [], extraExIds: ['lat_pulldown', 'leg_press']
+  };
+  const r = restorableSession(stored, '2026-09-01');
+  assert.deepEqual(r.extraExIds, ['lat_pulldown', 'leg_press']);
+});
+
+test('restorableSession: extraExIds が無い/壊れていても空配列にする（古いセッションとの互換）', () => {
+  const base = { program: 'A', date: '2026-09-01', startedAt: '2026-09-01', sets: [] };
+  assert.deepEqual(restorableSession(base, '2026-09-01').extraExIds, []);
+  assert.deepEqual(restorableSession({ ...base, extraExIds: 'garbage' }, '2026-09-01').extraExIds, []);
+  assert.deepEqual(restorableSession({ ...base, extraExIds: null }, '2026-09-01').extraExIds, []);
+});
+
+test('restorableSession: extraExIds の文字列以外の要素は落とす', () => {
+  const stored = {
+    program: 'A', date: '2026-09-01', startedAt: '2026-09-01',
+    sets: [], extraExIds: ['lat_pulldown', null, 42, { id: 'x' }, 'leg_press']
+  };
+  assert.deepEqual(restorableSession(stored, '2026-09-01').extraExIds, ['lat_pulldown', 'leg_press']);
+});
+
+// --- 重量の刻み ---
+
+test('WEIGHT_STEPS: 大きい順に 5 / 2.5 / 1.25 / 0.5', () => {
+  assert.deepEqual(WEIGHT_STEPS, [5, 2.5, 1.25, 0.5]);
+});
+
+test('nextWeightStep: 巡回する（末尾の次は先頭）', () => {
+  assert.equal(nextWeightStep(5), 2.5);
+  assert.equal(nextWeightStep(2.5), 1.25);
+  assert.equal(nextWeightStep(1.25), 0.5);
+  assert.equal(nextWeightStep(0.5), 5);
+});
+
+test('nextWeightStep: 一覧に無い値・不正な値は先頭(5)から始める', () => {
+  // data/exercises.json の step が将来変わっても、巡回が止まらないようにする。
+  for (const bad of [3, 0, -1, null, undefined, NaN, '2.5']) {
+    assert.equal(nextWeightStep(bad), 5, `${String(bad)} は 5 を返すべき`);
+  }
+});
+
+// --- セットの取り消し ---
+// 誤タップで記録したセットを、同じボタンをもう一度タップして取り消せるようにする。
+// session.sets は全種目が混ざった1本の配列なので、「その種目のi番目」を
+// 全体の何番目かに変換する必要がある。
+
+test('setIndexInSession: その種目のi番目のセットが、session.sets の何番目かを返す', () => {
+  const sets = [
+    { exId: 'chest', weight: 20, reps: 10 },
+    { exId: 'back', weight: 30, reps: 10 },
+    { exId: 'chest', weight: 22.5, reps: 10 },
+    { exId: 'chest', weight: 25, reps: 8 }
+  ];
+  assert.equal(setIndexInSession(sets, 'chest', 0), 0);
+  assert.equal(setIndexInSession(sets, 'chest', 1), 2);
+  assert.equal(setIndexInSession(sets, 'chest', 2), 3);
+  assert.equal(setIndexInSession(sets, 'back', 0), 1);
+});
+
+test('setIndexInSession: 範囲外・存在しない種目は -1', () => {
+  const sets = [{ exId: 'chest', weight: 20, reps: 10 }];
+  assert.equal(setIndexInSession(sets, 'chest', 1), -1);
+  assert.equal(setIndexInSession(sets, 'unknown', 0), -1);
+  assert.equal(setIndexInSession(sets, 'chest', -1), -1);
+  assert.equal(setIndexInSession([], 'chest', 0), -1);
+});
+
+test('setIndexInSession: 壊れた要素を読み飛ばしても、返すのは元配列の添字', () => {
+  // 削除に使う添字なので、読み飛ばした分だけずれると別のセットを消してしまう。
+  const sets = [null, { exId: 'chest', weight: 20, reps: 10 }, { noExId: true }, { exId: 'chest', weight: 25, reps: 8 }];
+  assert.equal(setIndexInSession(sets, 'chest', 0), 1);
+  assert.equal(setIndexInSession(sets, 'chest', 1), 3);
 });

@@ -1,12 +1,15 @@
 import { $, onShow, toast, vibrate, todayStr, newId, esc, icon } from './ui.js';
-import { nextProgram, calcVolume, lastSetFor, isPB, updateBests, restorableSession, programStatus } from './workout.js';
+import {
+  nextProgram, calcVolume, lastSetFor, isPB, updateBests, restorableSession, programStatus,
+  nextWeightStep, setIndexInSession
+} from './workout.js';
 import { addWorkoutXp, checkBadges, BADGES, calcStreak } from './game.js';
 import { bodyweightAsOf } from './body.js';
 import { renderStatusBar } from './mealTab.js';
 
 const PROGRAM_NAMES = { A: '胸・肩・三頭', B: '背中・二頭', C: '脚・腹' };
 const REST_SECONDS = 90;
-const EMPTY_SESSION = { program: null, date: null, startedAt: null, sets: [] };
+const EMPTY_SESSION = { program: null, date: null, startedAt: null, sets: [], extraExIds: [] };
 
 let store;
 let session = null; // { program, date, startedAt, sets: [] }
@@ -101,7 +104,7 @@ export function startSession(date) {
   const targetDate = date ?? today;
   const program = nextProgram(store.get('workouts'));
   if (targetDate !== today && !confirmSameDayDuplicate(targetDate, program)) return false;
-  session = { program, date: targetDate, startedAt: today, sets: [] };
+  session = { program, date: targetDate, startedAt: today, sets: [], extraExIds: [] };
   acquireWakeLock();
   return true;
 }
@@ -143,7 +146,14 @@ export function renderWorkoutTab() {
     // それでも念のため false を無視して死んだ画面にしないよう早期returnで守る。
     if (!startSession()) return;
   }
-  const exercises = store.get('exercises').filter((e) => e.program === session.program);
+  const allExercises = store.get('exercises');
+  // 今日のプログラムの種目＋利用者が個別に足した種目(session.extraExIds)。
+  // 追加種目は今日のプログラムの後ろに、足した順で並べる。
+  const extraIds = session.extraExIds ?? [];
+  const exercises = [
+    ...allExercises.filter((e) => e.program === session.program),
+    ...extraIds.map((id) => allExercises.find((e) => e.id === id)).filter(Boolean)
+  ];
   const workouts = store.get('workouts');
   const bests = store.get('game').bests;
   const statuses = programStatus(workouts, todayStr());
@@ -167,12 +177,73 @@ export function renderWorkoutTab() {
     </div>
     <div class="card">
       ${exercises.map((ex) => renderExercise(ex, workouts, bests)).join('')}
+      <button data-act="add-exercise" style="margin-top:12px;width:100%">種目を追加</button>
     </div>`;
 
   // 再描画のたびにハンドラが積み重ならないよう onclick 代入にする
   $('#tab-workout').onclick = onExerciseClick;
   $('#btnFinish').addEventListener('click', finishSession);
   updateVolume();
+}
+
+/**
+ * 今日のプログラムに無い種目を選んで追加する。
+ *
+ * 【なぜ必要か】このアプリは A/B/C を曜日固定せず順送りする設計だが、
+ * 「今日はAだが、背中も1種目だけやっておきたい」は実際に起きる。
+ * プログラムを切り替えると記録済みのセットが破棄される(switchProgram)ため、
+ * 従来はその日のうちに別プログラムの種目を混ぜる手段が無かった。
+ *
+ * 追加してもワークアウトの program は今日のまま。部位別XPは種目ごとに
+ * 部位を引くので(js/game.js の addWorkoutXp)、Bの種目を足せば背中のXPが入る。
+ * 「今週何回ジムへ行ったか」の数え方は日付ベースなので影響しない。
+ */
+function openAddExerciseDialog() {
+  const all = store.get('exercises');
+  const shown = new Set([
+    ...all.filter((e) => e.program === session.program).map((e) => e.id),
+    ...(session.extraExIds ?? [])
+  ]);
+  const candidates = all.filter((e) => !shown.has(e.id));
+
+  const dialog = document.createElement('div');
+  dialog.className = 'card';
+  dialog.id = 'addExerciseDialog';
+  dialog.innerHTML = candidates.length === 0
+    ? `<h2 style="margin-top:0">種目を追加</h2>
+       <p class="muted">追加できる種目がありません（全種目が今日の一覧に入っています）。</p>
+       <button id="btnCancelAddEx" style="width:100%">閉じる</button>`
+    : `<h2 style="margin-top:0">種目を追加</h2>
+       <p class="muted">今日のプログラム(${esc(session.program)})以外の種目を、この日の記録に足します。今日のプログラム自体は変わりません。</p>
+       ${['A', 'B', 'C'].filter((p) => p !== session.program).map((p) => {
+         const inProgram = candidates.filter((e) => e.program === p);
+         if (inProgram.length === 0) return '';
+         return `<div class="muted" style="margin-top:8px">【${esc(p)}】${esc(PROGRAM_NAMES[p])}</div>
+           <div class="chips">
+             ${inProgram.map((e) => `<button data-add-ex="${esc(e.id)}">${esc(e.name)}</button>`).join('')}
+           </div>`;
+       }).join('')}
+       <button id="btnCancelAddEx" style="margin-top:12px;width:100%">やめる</button>`;
+
+  $('#tab-workout').prepend(dialog);
+  dialog.scrollIntoView({ block: 'center' });
+
+  // 使い捨てのDOMなので addEventListener でよい
+  dialog.addEventListener('click', (e) => {
+    if (e.target.closest('#btnCancelAddEx')) {
+      dialog.remove();
+      return;
+    }
+    const btn = e.target.closest('[data-add-ex]');
+    if (!btn) return;
+    const id = btn.dataset.addEx;
+    session.extraExIds = [...(session.extraExIds ?? []), id];
+    persistSession();
+    dialog.remove();
+    const name = store.get('exercises').find((x) => x.id === id)?.name ?? '';
+    toast(`${name} を追加しました`);
+    renderWorkoutTab();
+  });
 }
 
 function programDaysLabel(status) {
@@ -203,25 +274,51 @@ function renderExercise(ex, workouts, bests) {
   // 絵文字は使わない。金の文字色(.pb-hint)だけで「自己ベストが懸かっている」ことは伝わる
   const hint = best ? `${best.weight}kg×${best.reps} を超えると自己ベスト` : '';
 
+  // 重量の刻み。利用者が種目ごとに選んだ値(profile.stepOverrides)を優先し、
+  // 未選択なら data/exercises.json の step を使う。
+  const step = weightStepFor(ex);
+  // 追加種目(今日のプログラム以外)であることを明示する。どのプログラムから
+  // 持ってきたのかが分からないと、記録を見返したときに混乱する。
+  const isExtra = ex.program !== session.program;
+
   return `
-    <div class="ex" data-ex="${ex.id}" data-step="${ex.step}">
+    <div class="ex" data-ex="${ex.id}" data-step="${step}">
       <div class="ex-head">
-        <span class="ex-name">${esc(ex.name)}</span>
+        <span class="ex-name">${esc(ex.name)}${isExtra ? ` <span class="ex-extra">${esc(ex.program)}から追加</span>` : ''}</span>
         <span class="ex-last">${last ? `前回 ${last.weight}×${last.reps}` : '初回'}</span>
       </div>
       ${hint ? `<div class="ex-last pb-hint">${hint}</div>` : ''}
       <div class="ex-ctrl">
-        <button data-act="w-">−</button>
+        <button data-act="w-" aria-label="${esc(ex.name)} 重量を${step}kg減らす">−</button>
         <span class="num" data-field="weight">${weight}</span><span class="muted">kg</span>
-        <button data-act="w+">＋</button>
-        <button data-act="r-">−</button>
+        <button data-act="w+" aria-label="${esc(ex.name)} 重量を${step}kg増やす">＋</button>
+        <button data-act="r-" aria-label="${esc(ex.name)} 回数を1減らす">−</button>
         <span class="num" data-field="reps">${reps}</span><span class="muted">回</span>
-        <button data-act="r+">＋</button>
+        <button data-act="r+" aria-label="${esc(ex.name)} 回数を1増やす">＋</button>
       </div>
       <div class="ex-ctrl">
-        ${Array.from({ length: ex.sets }, (_, i) => `<button class="setbtn${i < doneCount ? ' done' : ''}" data-act="set" data-index="${i}" aria-label="${esc(ex.name)} セット${i + 1}を記録">${icon('i-check')}</button>`).join('')}
+        ${Array.from({ length: ex.sets }, (_, i) => {
+          const done = i < doneCount;
+          // 記録済みのボタンをもう一度押すと取り消す。誤タップは立ったまま操作する
+          // 以上必ず起きるので、確認ダイアログは挟まない(もう一度押せば戻せる)。
+          return `<button class="setbtn${done ? ' done' : ''}" data-act="set" data-index="${i}"
+            aria-label="${esc(ex.name)} セット${i + 1}を${done ? '取り消す' : '記録する'}"
+            aria-pressed="${done}">${icon('i-check')}</button>`;
+        }).join('')}
+        <button class="stepbtn" data-act="step" aria-label="${esc(ex.name)} 重量の刻みを変更（現在${step}kg）">${step}kg刻み</button>
       </div>
     </div>`;
+}
+
+/**
+ * この種目の重量±ボタンの刻み(kg)。
+ * 利用者が選んだ値(profile.stepOverrides)を優先し、未選択なら種目マスタの step。
+ * 壊れた値(0以下・非数値)は種目マスタへフォールバックする。
+ */
+function weightStepFor(ex) {
+  const override = Number(store.get('profile').stepOverrides?.[ex.id]);
+  if (Number.isFinite(override) && override > 0) return override;
+  return Number(ex.step) || 2.5;
 }
 
 /**
@@ -265,6 +362,10 @@ function onExerciseClick(e) {
     switchProgram(btn.dataset.program);
     return;
   }
+  if (btn.dataset.act === 'add-exercise') {
+    openAddExerciseDialog();
+    return;
+  }
   const row = btn.closest('.ex');
   const exId = row.dataset.ex;
   const step = Number(row.dataset.step) || 2.5;
@@ -272,17 +373,95 @@ function onExerciseClick(e) {
   const repsEl = row.querySelector('[data-field="reps"]');
 
   switch (btn.dataset.act) {
-    case 'w+': weightEl.textContent = Number(weightEl.textContent) + step; break;
-    case 'w-': weightEl.textContent = Number(weightEl.textContent) - step; break;
+    // 重量は0未満にしない。負の重量は calcVolume 側でクランプされるが、
+    // 画面に -2.5kg と出ること自体が記録として意味を持たない。
+    case 'w+': weightEl.textContent = round2(Number(weightEl.textContent) + step); break;
+    case 'w-': weightEl.textContent = round2(Math.max(0, Number(weightEl.textContent) - step)); break;
     case 'r+': repsEl.textContent = Number(repsEl.textContent) + 1; break;
     case 'r-': repsEl.textContent = Math.max(1, Number(repsEl.textContent) - 1); break;
-    case 'set': recordSet(btn, exId, Number(weightEl.textContent), Number(repsEl.textContent)); break;
+    case 'step': cycleWeightStep(exId, step); break;
+    case 'set': toggleSet(btn, exId, Number(weightEl.textContent), Number(repsEl.textContent)); break;
   }
+}
+
+/**
+ * 1.25kg刻みで足し引きすると 0.1+0.2 と同じ理由で 21.250000000000004 のような
+ * 値が出る。表示にも session.sets にも入る数値なので、小数第2位で丸めておく。
+ * (0.5 / 1.25 / 2.5 / 5 のどの刻みでも、第2位までで正確に表せる)
+ */
+function round2(n) {
+  return Math.round(n * 100) / 100;
+}
+
+/**
+ * ✓ボタンの「記録済みかどうか」を表す属性を揃える。
+ * aria-label は押したときに何が起きるかを述べる(記録する / 取り消す)。
+ */
+function setButtonState(btn, done) {
+  btn.setAttribute('aria-pressed', String(done));
+  const label = btn.getAttribute('aria-label') ?? '';
+  btn.setAttribute('aria-label', done
+    ? label.replace('を記録する', 'を取り消す')
+    : label.replace('を取り消す', 'を記録する'));
+}
+
+/** 重量の刻みを次の段階へ。種目ごとに profile.stepOverrides へ覚える */
+function cycleWeightStep(exId, current) {
+  const profile = store.get('profile');
+  const next = nextWeightStep(current);
+  try {
+    store.set('profile', { ...profile, stepOverrides: { ...profile.stepOverrides, [exId]: next } });
+  } catch {
+    toast('刻みを保存できませんでした（端末の空き容量を確認してください）');
+    return;
+  }
+  renderWorkoutTab();
+}
+
+/**
+ * ✓ボタンのタップ。未記録なら記録し、記録済みならその1セットを取り消す。
+ *
+ * 【なぜ取り消しが要るか】立ったまま汗ばんだ手で操作する以上、誤タップは必ず起きる。
+ * 以前は記録済みボタンを押しても何も起こらず、間違えたセットを消す手段が
+ * 「終了して保存」してから日付ビューでワークアウトごと削除するしかなかった。
+ * 確認ダイアログは挟まない — もう一度押せば戻せる操作に確認を付けると、
+ * 本来1タップで済むはずの記録が2タップになる。
+ */
+function toggleSet(btn, exId, weight, reps) {
+  if (btn.classList.contains('done')) {
+    undoSet(btn, exId);
+    return;
+  }
+  recordSet(btn, exId, weight, reps);
+}
+
+function undoSet(btn, exId) {
+  const nth = Number(btn.dataset.index);
+  // 「この種目のnth番目」が session.sets の何番目かを引く。
+  // ここを取り違えると別の種目のセットを消す(js/workout.js の setIndexInSession)。
+  const idx = setIndexInSession(session.sets, exId, nth);
+  if (idx === -1) return;
+  session.sets.splice(idx, 1);
+  persistSession();
+
+  // 取り消したのだから休憩タイマーも止める。押し間違いで始まったタイマーが
+  // そのまま90秒動き続けると、次のセットの間隔がずれる。
+  clearInterval(timerId);
+  removeTimer();
+
+  toast('セットを取り消しました');
+  // 表示中の重量・回数は「今回の最後に記録した値」から導出しているため、
+  // 取り消し後は再描画して整合させる。
+  renderWorkoutTab();
 }
 
 function recordSet(btn, exId, weight, reps) {
   if (btn.classList.contains('done')) return;
   btn.classList.add('done');
+  // recordSet は1タップの速さを保つため再描画しない。そのぶん、ボタンの状態を
+  // 表す属性はここで自分で更新する必要がある。これを忘れると、記録済みなのに
+  // 読み上げは「セット2を記録する」のまま残り、押すと実際には取り消される。
+  setButtonState(btn, true);
   session.sets.push({ exId, weight, reps });
   persistSession();
   acquireWakeLock(); // 意図的にawaitしない: 失敗・非対応でもセット記録自体は止めない

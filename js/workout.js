@@ -247,7 +247,58 @@ export function restorableSession(stored, todayStr) {
   if (!isValidDateStr(stored.date)) return null;
   if (!PROGRAMS.includes(stored.program)) return null;
   if (!Array.isArray(stored.sets)) return null;
-  return { program: stored.program, date: stored.date, startedAt: stored.startedAt, sets: stored.sets };
+  // extraExIds: 「今日はAだが背中も1種目だけやる」ための追加種目。
+  // この関数は既知フィールドだけを返す設計なので、ここに足さないとタブを
+  // 往復した瞬間に追加種目が消える(復元のたびにプログラム標準の6種目へ戻る)。
+  // 古いセッション・壊れた値との互換のため、配列でなければ空配列にし、
+  // 文字列以外の要素は落とす。
+  const extraExIds = Array.isArray(stored.extraExIds)
+    ? stored.extraExIds.filter((id) => typeof id === 'string')
+    : [];
+  return { program: stored.program, date: stored.date, startedAt: stored.startedAt, sets: stored.sets, extraExIds };
+}
+
+/**
+ * 重量の±ボタンの刻み(kg)。大きい順。
+ *
+ * 【なぜ複数持つか】マシンのウェイトスタックは2.5kgまたは5kg刻みだが、
+ * 1.25kgの追加プレートを載せられる機種や、ダンベルでの微調整がある。
+ * 刻みが固定だと、実際に扱っている重量を記録できない。
+ * 逆に全種目を細かくすると 20kg→40kg のような大きな変更にタップ数が倍以上かかる。
+ * そのため「今どの刻みか」を表示するボタンを1つ置き、タップで巡回させる。
+ * 選んだ刻みは種目ごとに profile.stepOverrides へ覚える(毎回選び直させない)。
+ */
+export const WEIGHT_STEPS = [5, 2.5, 1.25, 0.5];
+
+/**
+ * 次の刻みへ巡回する。末尾の次は先頭に戻る。
+ * 一覧に無い値・不正な値は先頭(最も粗い5kg)から始める
+ * (data/exercises.json の step が将来変わっても巡回が止まらないようにするため)。
+ */
+export function nextWeightStep(current) {
+  const i = WEIGHT_STEPS.indexOf(current);
+  if (i === -1) return WEIGHT_STEPS[0];
+  return WEIGHT_STEPS[(i + 1) % WEIGHT_STEPS.length];
+}
+
+/**
+ * 「その種目の nth 番目のセット」が session.sets の何番目かを返す。無ければ -1。
+ *
+ * 【なぜ必要か】session.sets は全種目が混ざった1本の配列だが、画面の✓ボタンは
+ * 種目ごとに0から数えている。誤タップの取り消しでこの変換を間違えると、
+ * **別の種目のセットを消す**ことになる。
+ * 壊れた要素(null・exIdを持たない)は数えないが、返すのは元配列の添字である
+ * (読み飛ばした分だけずれると、やはり別のセットを消してしまう)。
+ */
+export function setIndexInSession(sets, exId, nth) {
+  if (!Array.isArray(sets) || typeof exId !== 'string' || !Number.isInteger(nth) || nth < 0) return -1;
+  let seen = 0;
+  for (let i = 0; i < sets.length; i++) {
+    if (sets[i]?.exId !== exId) continue;
+    if (seen === nth) return i;
+    seen++;
+  }
+  return -1;
 }
 
 /**

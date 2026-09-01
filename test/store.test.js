@@ -240,9 +240,19 @@ test('validate() は mt. 以外のキーには一切触らない', () => {
 
 // --- 最終レビュー対応の回帰テスト ---
 
-test('session キーはデフォルトで program/date/startedAt が null、sets が空配列', () => {
+test('session キーはデフォルトで program/date/startedAt が null、sets/extraExIds が空配列', () => {
   const store = createStore(memoryStorage());
-  assert.deepEqual(store.get('session'), { program: null, date: null, startedAt: null, sets: [] });
+  assert.deepEqual(store.get('session'), { program: null, date: null, startedAt: null, sets: [], extraExIds: [] });
+});
+
+test('session: 古いセッション(extraExIdsを持たない)を読んでも空配列が補われる', () => {
+  // 既存インストールの localStorage には extraExIds を持たない session が入っている。
+  // deepMerge で既定値が補われないと、renderWorkoutTab の spread で例外になる。
+  const storage = memoryStorage({
+    'mt.session': JSON.stringify({ program: 'A', date: '2026-09-01', startedAt: '2026-09-01', sets: [] })
+  });
+  const store = createStore(storage);
+  assert.deepEqual(store.get('session').extraExIds, []);
 });
 
 test('session を保存して読み戻せる(startedAtも含めて)', () => {

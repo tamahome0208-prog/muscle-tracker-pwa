@@ -56,6 +56,12 @@ export const DEFAULTS = deepFreeze({
     sex: 'male',
     startDate: null,
     targets: { protein: 100, kcalMin: 1700, kcalMax: 1800, kcalFloor: DEFAULT_KCAL_FLOOR, alcoholMl: 500 },
+    // 種目ごとの重量±ボタンの刻み(kg)。{ [exId]: 1.25 } の形。
+    // 未指定の種目は data/exercises.json の step を使う。
+    // 【なぜ exercises 側ではなく profile に持つか】js/main.js の移行処理は
+    // exercisesSyncedV2 で種目マスタを data/exercises.json の内容へ丸ごと
+    // 置き換える。種目レコードに書くと、その移行で利用者の選択が消える。
+    stepOverrides: {},
     // 「その日の食事はほぼ終わった」とみなす時刻(0〜23)。js/nutrition.js の isDayOver 参照。
     // 朝プロテイン+夕食1食というこのユーザーの食生活では、20時では夕食前に
     // 毎日必ず「食べなさすぎ」警告が誤爆するため22時を既定にしている。
@@ -111,7 +117,9 @@ export const DEFAULTS = deepFreeze({
   // を参照）。date だけで判定すると、過去日を選んでバックデート入力を始めた
   // セッションが「date=今日ではない」という理由で誤って古いものとして
   // 破棄されてしまう。
-  session: { program: null, date: null, startedAt: null, sets: [] }
+  // extraExIds: 「今日はAだが背中も1種目だけやる」ための追加種目のID。
+  // js/workout.js の restorableSession がこのフィールドを保持する。
+  session: { program: null, date: null, startedAt: null, sets: [], extraExIds: [] }
 });
 
 const KEY_PREFIX = 'mt.';

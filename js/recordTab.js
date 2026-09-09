@@ -26,7 +26,8 @@ import {
   bodyFatGoalTension,
   recentWeeklyWeightPctChange,
   consecutiveFallingWeeks,
-  MEASUREMENT_NOISE_NOTE
+  MEASUREMENT_NOISE_NOTE,
+  trendReadiness
 } from './goals.js';
 
 let store;
@@ -149,6 +150,28 @@ function changeClass(n, goodWhenPositive) {
 }
 
 /**
+ * トレンドがまだ出せないときの文言。「まだ分からない」で止めず、
+ * あと何回・あと何日で出るのかを示す。
+ *
+ * 【なぜ変えたか】以前は「まだ8〜12週分のトレンドが確立していないため…」と
+ * 出していたが、bodyTrend は3点移動平均の先頭と末尾を落とすため、
+ * 週1回の測定では実際には11件(10週分)必要だった。
+ * **10週間まじめに測り続けても「まだ十分でない」と言われる**状態で、
+ * 期待とのずれはそのまま「やっても意味がない」という印象になる。
+ * js/goals.js の trendReadiness が、何が足りないかを具体的に返す。
+ */
+function trendPendingMessage(body, today) {
+  const r = trendReadiness(body, today);
+  if (r.ready) return '';
+  if (r.reason === 'records') {
+    return `<p class="muted">月間の進捗ペースを出すには、あと<strong>${r.needMore}回</strong>の体組成の記録が必要です
+      (測定のばらつきに埋もれない変化だけを表示するため、3点移動平均を使っています)。</p>`;
+  }
+  return `<p class="muted">月間の進捗ペースを出すには、あと<strong>${r.daysMore}日</strong>ぶんの記録期間が必要です
+    (今のペースで測定を続けてください)。単発の記録2点を比べても、それは進捗ではなく測定のばらつきです。</p>`;
+}
+
+/**
  * 「目標(細マッチョ)への進捗」カード(js/goals.js)。単発の記録同士を比べる従来の
  * bodyDiff(上の体組成カード「開始比」)とは別物であることを明示する: ここは
  * 3点移動平均・8〜12週窓のトレンドが確立して初めて数値を出し、それ以外は
@@ -246,7 +269,7 @@ function renderGoalCard() {
     ? `<p class="muted">直近${trend.days}日のトレンド(3点移動平均): FFM ${trend.ffmKg.deltaKg >= 0 ? '+' : ''}${trend.ffmKg.deltaKg.toFixed(2)}kg
         (月あたり約${trend.ffmKg.ratePerMonthKg >= 0 ? '+' : ''}${trend.ffmKg.ratePerMonthKg.toFixed(2)}kg)、
         体脂肪率 ${trend.bodyFatPct.deltaPct >= 0 ? '+' : ''}${trend.bodyFatPct.deltaPct.toFixed(1)}pt</p>`
-    : '<p class="muted">まだ8〜12週分のトレンドが確立していないため、月間の進捗ペースは表示できません。</p>';
+    : trendPendingMessage(body, today);
 
   const projectionBlock = projection.reached
     ? '<p>目標のFFMに到達しています。</p>'

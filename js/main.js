@@ -8,6 +8,8 @@ import { initHomeTab } from './homeTab.js';
 import { initSettingsTab } from './settingsTab.js';
 import { migrateHistoricalVolume } from './workout.js';
 import { requestPersistentStorage } from './storageInfo.js';
+import { needsGameRebuild, recomputeGame } from './game.js';
+import { bodyweightAsOf } from './body.js';
 
 export const store = createStore();
 
@@ -251,6 +253,31 @@ async function boot() {
     }
   } catch (err) {
     console.error('store.validate() に失敗しました:', err);
+  }
+
+  // 自己ベスト・部位レベルが失われていたら全履歴から作り直す。
+  //
+  // 【なぜここか】直前の store.validate() は壊れた game キーを既定値へ初期化する。
+  // game を含まないバックアップを復元した場合も同じ状態になる。
+  // そのまま起動すると、何ヶ月ぶんの記録があっても部位レベルは全部0で、
+  // 次の1セットが全種目で「自己ベスト更新」として誤って祝われる。
+  // 修復手段(recomputeGame)は元からあったが、記録の削除時にしか呼ばれていなかった。
+  //
+  // 称号(badges)は作り直さない。称号は罰ではないので取り消さない設計であり、
+  // recomputeGame も badges に触れない(js/game.js 参照)。
+  try {
+    const game = store.get('game');
+    const workouts = store.get('workouts');
+    if (needsGameRebuild(game, workouts)) {
+      const body = store.get('body');
+      const profile = store.get('profile');
+      const { xp, bests } = recomputeGame(workouts, store.get('exercises'), (d) => bodyweightAsOf(body, d, profile));
+      store.set('game', { ...game, xp, bests });
+      console.info('自己ベスト・部位レベルを記録から再構築しました');
+    }
+  } catch (err) {
+    // 再構築に失敗しても起動は止めない。次回起動でまた試みる。
+    console.warn('自己ベスト・部位レベルの再構築に失敗しました:', err);
   }
 
   // 【重要・順序】画面を先に立ち上げてから、種データの取得を待つ。

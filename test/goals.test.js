@@ -12,7 +12,8 @@ import {
   consecutiveFallingWeeks,
   LIT_LEAN_GAIN_MIN_KG_PER_MONTH,
   LIT_LEAN_GAIN_MAX_KG_PER_MONTH,
-  HEALTHY_BODYFAT_RANGE_LOW
+  HEALTHY_BODYFAT_RANGE_LOW,
+  trendReadiness
 } from '../js/goals.js';
 
 // --- bodyTrend ---
@@ -253,4 +254,63 @@ test('consecutiveFallingWeeks: 直近が前週以上なら0', () => {
 test('consecutiveFallingWeeks: 点が1件以下なら0', () => {
   assert.equal(consecutiveFallingWeeks([500]), 0);
   assert.equal(consecutiveFallingWeeks([]), 0);
+});
+
+// --- トレンド表示までの残り（trendReadiness） ---
+// bodyTrend は3点移動平均の先頭と末尾を落とすため、週1回の測定では
+// 11件(10週分)ためて初めて表示される。しかし画面は
+// 「8〜12週分の記録が貯まって初めて表示します」と言っていた。
+// **10週間まじめに測り続けても「まだ十分でない」と言われる。**
+// 期待とのずれは、そのまま「やっても意味がない」という印象になる。
+// あと何回・あと何日で出るのかを具体的に返す。
+
+test('trendReadiness: 条件を満たしていれば ready', () => {
+  const body = Array.from({ length: 12 }, (_, i) => ({
+    date: new Date(Date.UTC(2026, 5, 1) + i * 7 * 86400000).toISOString().slice(0, 10),
+    weight: 60, muscle: 28 + i * 0.1, fatPct: 20 - i * 0.1
+  }));
+  const r = trendReadiness(body, '2026-08-19');
+  assert.equal(r.ready, true);
+});
+
+test('trendReadiness: 記録が4件未満なら、あと何件かを返す', () => {
+  const body = [
+    { date: '2026-08-01', weight: 60, muscle: 28, fatPct: 20 },
+    { date: '2026-08-08', weight: 60, muscle: 28, fatPct: 20 }
+  ];
+  const r = trendReadiness(body, '2026-08-19');
+  assert.equal(r.ready, false);
+  assert.equal(r.reason, 'records');
+  assert.equal(r.needMore, 2); // 4件必要なのであと2件
+});
+
+test('trendReadiness: 記録数は足りるが期間が短ければ、あと何日かを返す', () => {
+  // 4件を1週間おき = 移動平均の窓は 2件・span 7日。56日には49日足りない。
+  const body = Array.from({ length: 4 }, (_, i) => ({
+    date: new Date(Date.UTC(2026, 7, 1) + i * 7 * 86400000).toISOString().slice(0, 10),
+    weight: 60, muscle: 28, fatPct: 20
+  }));
+  const r = trendReadiness(body, '2026-08-22');
+  assert.equal(r.ready, false);
+  assert.equal(r.reason, 'span');
+  assert.equal(r.daysMore, 49);
+});
+
+test('trendReadiness: 記録が1件も無ければ4件必要と返す', () => {
+  const r = trendReadiness([], '2026-08-19');
+  assert.equal(r.ready, false);
+  assert.equal(r.reason, 'records');
+  assert.equal(r.needMore, 4);
+});
+
+test('trendReadiness: 壊れたレコード・未来日付は数に入れない', () => {
+  const body = [
+    null,
+    { date: 'いつか', weight: 60, muscle: 28, fatPct: 20 },
+    { date: '2099-01-01', weight: 60, muscle: 28, fatPct: 20 },
+    { date: '2026-08-01', weight: 60, muscle: 28, fatPct: 20 }
+  ];
+  const r = trendReadiness(body, '2026-08-19');
+  assert.equal(r.reason, 'records');
+  assert.equal(r.needMore, 3);
 });

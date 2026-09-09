@@ -258,7 +258,12 @@ export function achievement(totals, targets, { dayOver = false, ffmKg = null, ex
       level: 'info',
       message: `目標を${Math.round(kcal - targets.kcalMax)}kcal超えています`
     });
-  } else if (!dayOver) {
+  } else if (!dayOver && remainingAnchor - kcal > 0) {
+    // 【残量が負のときは何も言わない】以前は「残り -40kcal」と表示していた。
+    // 残量が負という表示は意味を成さない。
+    // ここは「下限を超え、上限には届いていない」帯であり、上限超過でも
+    // 下限割れでもない = 目標の範囲内である。カロリーについて言うことは無い
+    // (バーが 1740 / 1700〜1800 と範囲を示しており、状態は既に伝わっている)。
     warnings.push({
       type: 'kcalRemaining',
       level: 'info',

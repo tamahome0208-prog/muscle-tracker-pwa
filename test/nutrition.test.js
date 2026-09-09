@@ -477,3 +477,28 @@ test('daysSinceLastMealLog: 壊れたレコード・未来日付を読み飛ば�
 test('MEAL_LOG_GAP_DAYS は3日。これを超えたら記録が途切れているとみなす', () => {
   assert.equal(MEAL_LOG_GAP_DAYS, 3);
 });
+
+// --- 「残り」が負にならないこと ---
+// 摂取が kcalMin を超えて kcalMax 未満のとき、以前は「残り -40kcal」と表示していた。
+// 残量が負という表示は意味を成さない。この帯は「目標の範囲内」であり、
+// 上限超過でも下限割れでもないので、カロリーについては何も言わなくてよい
+// (バーが 1740 / 1700〜1800 と範囲を示しており、状態は伝わっている)。
+
+test('achievement: 下限を超え上限未満なら「残り」を出さない（負の残量を表示しない）', () => {
+  const a = achievement({ kcal: 1740, protein: 104, alcoholMl: 0 }, TARGETS, { dayOver: false });
+  const remaining = a.warnings.find((w) => w.type === 'kcalRemaining');
+  assert.equal(remaining, undefined, '残量が負になる帯では kcalRemaining を出さない');
+  assert.equal(a.warnings.find((w) => w.type === 'kcalOver'), undefined, '上限は超えていない');
+});
+
+test('achievement: 残量が正なら従来どおり「残り◯kcal」を出す', () => {
+  const a = achievement({ kcal: 900, protein: 50, alcoholMl: 0 }, TARGETS, { dayOver: false });
+  const remaining = a.warnings.find((w) => w.type === 'kcalRemaining');
+  assert.ok(remaining);
+  assert.equal(remaining.message, `残り ${TARGETS.kcalMin - 900}kcal`);
+});
+
+test('achievement: ちょうど下限に達したときも「残り0kcal」を出さない', () => {
+  const a = achievement({ kcal: TARGETS.kcalMin, protein: 100, alcoholMl: 0 }, TARGETS, { dayOver: false });
+  assert.equal(a.warnings.find((w) => w.type === 'kcalRemaining'), undefined);
+});

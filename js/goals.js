@@ -100,6 +100,43 @@ const MIN_RAW_RECORDS = 4;
  * body は storage/store.importAll由来の信頼できない外部データなので、
  * 壊れたレコード(日付不正・体重や体脂肪率が欠損/非数値)は読み飛ばす。
  */
+/**
+ * トレンド(bodyTrend)を表示できるまで、あと何が足りないかを返す。
+ *
+ * 【なぜ必要か】bodyTrend は3点移動平均を使うため先頭と末尾の記録が落ちる。
+ * その結果、週1回の測定では **11件(10週分)** ためて初めて表示される。
+ * ところが画面は「8〜12週分の記録が貯まって初めて表示します」と言っていた。
+ * 10週間まじめに測り続けても「まだ十分でない」と言われることになり、
+ * 期待とのずれはそのまま「やっても意味がない」という印象になる。
+ *
+ * 「まだ分からない」で止めず、あと何回・あと何日で出るのかを具体的に返す。
+ *
+ * 戻り値:
+ *   { ready: true }
+ *   { ready: false, reason: 'records', needMore: n }  記録の件数が足りない
+ *   { ready: false, reason: 'span', daysMore: d }     期間が足りない
+ */
+export function trendReadiness(body, todayStr) {
+  if (bodyTrend(body, todayStr) !== null) return { ready: true };
+
+  const records = (body ?? [])
+    .filter(isUsableRecord)
+    .filter((b) => b.date <= todayStr && dateDiffDays(b.date, todayStr) <= MAX_WINDOW_DAYS)
+    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+
+  if (records.length < MIN_RAW_RECORDS) {
+    return { ready: false, reason: 'records', needMore: MIN_RAW_RECORDS - records.length };
+  }
+
+  // 件数は足りているので、足りないのは期間。
+  // 移動平均の窓は先頭と末尾を落とした範囲(records[1] 〜 records[n-2])で、
+  // その幅が MIN_WINDOW_DAYS 以上になる必要がある。
+  const start = records[1].date;
+  const end = records[records.length - 2].date;
+  const span = dateDiffDays(start, end);
+  return { ready: false, reason: 'span', daysMore: Math.max(1, MIN_WINDOW_DAYS - span) };
+}
+
 export function bodyTrend(body, todayStr) {
   if (!isValidDateStr(todayStr)) return null;
 

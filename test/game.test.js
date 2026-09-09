@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PARTS, levelFromXp, addWorkoutXp, radarData } from '../js/game.js';
+import { PARTS, levelFromXp, addWorkoutXp, radarData, needsGameRebuild } from '../js/game.js';
 import { calcStreak, isInitialPhase, initialPhaseStatus } from '../js/game.js';
 import { BADGES, checkBadges, recomputeGame } from '../js/game.js';
 
@@ -425,4 +425,38 @@ test('筋肉量+2.0kgで「中身が変わった」を獲得する（+1.9kgで�
     ]
   });
   assert.ok(over.includes('muscle_plus2'));
+});
+
+// --- 自己ベスト・XPが失われたときの再構築（needsGameRebuild） ---
+// js/store.js の validate() は壊れた game キーを既定値へ初期化する。
+// バックアップに game が含まれない場合も同じ状態になる。
+// そのとき自己ベストと部位レベルが黙って0に戻り、次の1セットが
+// 全種目で「自己ベスト更新」として誤って祝われる。
+// recomputeGame は存在するのに、削除時(js/dayView.js)からしか呼ばれていなかった。
+
+test('needsGameRebuild: 記録があるのに bests が空なら true', () => {
+  const workouts = [{ id: 'w1', date: '2026-08-01', program: 'A', sets: [{ exId: 'x', weight: 20, reps: 10 }] }];
+  assert.equal(needsGameRebuild({ bests: {}, xp: {} }, workouts), true);
+});
+
+test('needsGameRebuild: bests があれば false（毎回作り直さない）', () => {
+  const workouts = [{ id: 'w1', date: '2026-08-01', program: 'A', sets: [{ exId: 'x', weight: 20, reps: 10 }] }];
+  assert.equal(needsGameRebuild({ bests: { x: { weight: 20, reps: 10 } }, xp: {} }, workouts), false);
+});
+
+test('needsGameRebuild: 記録が無ければ false（新規インストールで走らせない）', () => {
+  assert.equal(needsGameRebuild({ bests: {}, xp: {} }, []), false);
+  assert.equal(needsGameRebuild({ bests: {}, xp: {} }, null), false);
+});
+
+test('needsGameRebuild: game が壊れていても例外を投げない', () => {
+  const workouts = [{ id: 'w1', date: '2026-08-01', program: 'A', sets: [{ exId: 'x', weight: 20, reps: 10 }] }];
+  assert.equal(needsGameRebuild(null, workouts), true);
+  assert.equal(needsGameRebuild({}, workouts), true);
+  assert.equal(needsGameRebuild({ bests: 'garbage' }, workouts), true);
+});
+
+test('needsGameRebuild: セットを持たない記録しか無ければ false（再構築しても何も得られない）', () => {
+  const workouts = [{ id: 'w1', date: '2026-08-01', program: 'A', sets: [] }];
+  assert.equal(needsGameRebuild({ bests: {}, xp: {} }, workouts), false);
 });

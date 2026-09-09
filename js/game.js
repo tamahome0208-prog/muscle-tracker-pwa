@@ -76,6 +76,34 @@ export function addWorkoutXp(xpMap, workout, exercises, bodyweight) {
  * sets が配列でない・null要素のレコードは例外を投げずに除外する
  * （js/workout.js の weeklyVolume 等と同じ方針）。
  */
+/**
+ * game.xp / game.bests を全履歴から作り直す必要があるかを判定する。
+ *
+ * 【なぜ必要か】js/store.js の validate() は壊れた game キーを既定値へ初期化する。
+ * game を含まないバックアップを復元した場合も同じ状態になる。
+ * そのとき自己ベストと部位レベルは黙って0に戻り、
+ * **次の1セットが全種目で「自己ベスト更新」として誤って祝われる。**
+ * 何ヶ月ぶんの記録があっても、部位レベルは全部0のままになる。
+ *
+ * recomputeGame はこの状態を修復できるのに、これまで記録の削除時
+ * (js/dayView.js)からしか呼ばれていなかった。
+ *
+ * 【毎回作り直さない理由】recomputeGame は全ワークアウトを走査するうえ、
+ * 体重の解決を日付ごとに行う。起動のたびに走らせる必要は無く、
+ * 「明らかに失われている」ときだけ直せばよい。
+ * bests が1件でもあれば、それは正常に積み上がっている証拠として扱う。
+ *
+ * セットを1つも持たない記録しか無い場合は再構築しても何も得られないので false。
+ */
+export function needsGameRebuild(game, workouts) {
+  if (!Array.isArray(workouts) || workouts.length === 0) return false;
+  const hasAnySet = workouts.some((w) => Array.isArray(w?.sets) && w.sets.length > 0);
+  if (!hasAnySet) return false;
+  const bests = game?.bests;
+  if (bests === null || typeof bests !== 'object' || Array.isArray(bests)) return true;
+  return Object.keys(bests).length === 0;
+}
+
 export function recomputeGame(workouts, exercises, bodyweightForDate) {
   const sorted = (workouts ?? [])
     .filter((w) => w && isValidDateStr(w.date) && Array.isArray(w.sets))

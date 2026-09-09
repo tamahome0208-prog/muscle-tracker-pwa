@@ -62,6 +62,11 @@ export const DEFAULTS = deepFreeze({
     // exercisesSyncedV2 で種目マスタを data/exercises.json の内容へ丸ごと
     // 置き換える。種目レコードに書くと、その移行で利用者の選択が消える。
     stepOverrides: {},
+    // 種目ごとのセット間休憩(秒)。{ [exId]: 120 } の形。
+    // 未指定の種目は js/workout.js の DEFAULT_REST_SECONDS(90秒)を使う。
+    // stepOverrides と同じ理由で exercises 側ではなく profile に持つ
+    // (exercisesSyncedV2 の移行で種目マスタが丸ごと置き換わるため)。
+    restOverrides: {},
     // 「その日の食事はほぼ終わった」とみなす時刻(0〜23)。js/nutrition.js の isDayOver 参照。
     // 朝プロテイン+夕食1食というこのユーザーの食生活では、20時では夕食前に
     // 毎日必ず「食べなさすぎ」警告が誤爆するため22時を既定にしている。

@@ -1,14 +1,14 @@
 import { $, onShow, toast, vibrate, todayStr, newId, esc, icon } from './ui.js';
 import {
   nextProgram, calcVolume, lastSetFor, isPB, updateBests, restorableSession, programStatus,
-  nextWeightStep, setIndexInSession, suggestNextWeight
+  nextWeightStep, setIndexInSession, suggestNextWeight,
+  nextRestSeconds, DEFAULT_REST_SECONDS
 } from './workout.js';
 import { addWorkoutXp, checkBadges, BADGES, calcStreak } from './game.js';
 import { bodyweightAsOf } from './body.js';
 import { renderStatusBar } from './mealTab.js';
 
 const PROGRAM_NAMES = { A: '胸・肩・三頭', B: '背中・二頭', C: '脚・腹' };
-const REST_SECONDS = 90;
 const EMPTY_SESSION = { program: null, date: null, startedAt: null, sets: [], extraExIds: [] };
 
 let store;
@@ -277,12 +277,13 @@ function renderExercise(ex, workouts, bests) {
   // 重量の刻み。利用者が種目ごとに選んだ値(profile.stepOverrides)を優先し、
   // 未選択なら data/exercises.json の step を使う。
   const step = weightStepFor(ex);
+  const rest = restSecondsFor(ex);
   // 追加種目(今日のプログラム以外)であることを明示する。どのプログラムから
   // 持ってきたのかが分からないと、記録を見返したときに混乱する。
   const isExtra = ex.program !== session.program;
 
   return `
-    <div class="ex" data-ex="${ex.id}" data-step="${step}">
+    <div class="ex" data-ex="${ex.id}" data-step="${step}" data-rest="${rest}">
       <div class="ex-head">
         <span class="ex-name">${esc(ex.name)}${isExtra ? ` <span class="ex-extra">${esc(ex.program)}から追加</span>` : ''}</span>
         <span class="ex-last">${last ? `前回 ${last.weight}×${last.reps}` : '初回'}</span>
@@ -307,6 +308,7 @@ function renderExercise(ex, workouts, bests) {
             aria-pressed="${done}">${icon('i-check')}</button>`;
         }).join('')}
         <button class="stepbtn" data-act="step" aria-label="${esc(ex.name)} 重量の刻みを変更（現在${step}kg）">${step}kg刻み</button>
+        <button class="stepbtn" data-act="rest" aria-label="${esc(ex.name)} 休憩時間を変更（現在${rest}秒）">休憩${rest}秒</button>
       </div>
     </div>`;
 }
@@ -416,6 +418,7 @@ function onExerciseClick(e) {
     case 'r+': repsEl.textContent = Number(repsEl.textContent) + 1; break;
     case 'r-': repsEl.textContent = Math.max(1, Number(repsEl.textContent) - 1); break;
     case 'step': cycleWeightStep(exId, step); break;
+    case 'rest': cycleRest(exId, Number(row.dataset.rest) || DEFAULT_REST_SECONDS); break;
     // 提案をタップしたときだけ入力欄へ反映する(自動では入れない)
     case 'apply-suggestion': weightEl.textContent = round2(Number(btn.dataset.weight)); break;
     case 'set': toggleSet(btn, exId, Number(weightEl.textContent), Number(repsEl.textContent)); break;
@@ -441,6 +444,29 @@ function setButtonState(btn, done) {
   btn.setAttribute('aria-label', done
     ? label.replace('を記録する', 'を取り消す')
     : label.replace('を取り消す', 'を記録する'));
+}
+
+/**
+ * この種目のセット間休憩(秒)。利用者が選んだ値(profile.restOverrides)を優先し、
+ * 未選択なら DEFAULT_REST_SECONDS。壊れた値は既定へフォールバックする。
+ */
+function restSecondsFor(ex) {
+  const override = Number(store.get('profile').restOverrides?.[ex.id]);
+  if (Number.isFinite(override) && override > 0) return override;
+  return DEFAULT_REST_SECONDS;
+}
+
+/** 休憩時間を次の段階へ。種目ごとに profile.restOverrides へ覚える */
+function cycleRest(exId, current) {
+  const profile = store.get('profile');
+  const next = nextRestSeconds(current);
+  try {
+    store.set('profile', { ...profile, restOverrides: { ...profile.restOverrides, [exId]: next } });
+  } catch {
+    toast('休憩時間を保存できませんでした（端末の空き容量を確認してください）');
+    return;
+  }
+  renderWorkoutTab();
 }
 
 /** 重量の刻みを次の段階へ。種目ごとに profile.stepOverrides へ覚える */
@@ -517,7 +543,9 @@ function recordSet(btn, exId, weight, reps) {
   }
 
   updateVolume();
-  startRestTimer();
+  // 休憩時間は種目ごとに違う(js/workout.js の REST_STEPS)。
+  // ボタンを押した行から読む。
+  startRestTimer(Number(btn.closest('.ex')?.dataset.rest) || DEFAULT_REST_SECONDS);
 }
 
 function updateVolume() {
@@ -536,9 +564,9 @@ function updateVolume() {
  * タイマー表示中は #timer 自体に pointer-events:none も付けているので、
  * 万一余白が足りない環境でもタップはタイマーではなくその下の要素に届く。
  */
-function startRestTimer() {
+function startRestTimer(seconds) {
   clearInterval(timerId);
-  let left = REST_SECONDS;
+  let left = Number.isFinite(seconds) && seconds > 0 ? seconds : DEFAULT_REST_SECONDS;
   let el = $('#timer');
   if (!el) {
     el = document.createElement('div');

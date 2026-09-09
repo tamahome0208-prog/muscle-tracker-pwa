@@ -27,6 +27,8 @@ import {
   nextWeightStep,
   setIndexInSession,
   suggestNextWeight,
+  REST_STEPS,
+  nextRestSeconds,
   PROGRAMS
 } from '../js/workout.js';
 import { bodyweightAsOf } from '../js/body.js';
@@ -1015,4 +1017,27 @@ test('suggestNextWeight: 1.25kg刻みでも浮動小数点の誤差を出さな�
     { exId: 'chest', weight: 20, reps: 10 }, { exId: 'chest', weight: 20, reps: 10 }, { exId: 'chest', weight: 20, reps: 10 }
   ])];
   assert.equal(suggestNextWeight({ workouts, ex: SUGGEST_EX, step: 1.25 }).weight, 21.25);
+});
+
+// --- 種目ごとの休憩時間（REST_STEPS / nextRestSeconds） ---
+// これまで全種目一律90秒だった。レッグプレスと二頭のカールで同じ90秒は実態と合わない。
+// 刻み(WEIGHT_STEPS)と同じ形で、種目ごとに選んで覚える。
+
+test('REST_STEPS: 60 / 90 / 120 / 180 秒', () => {
+  assert.deepEqual(REST_STEPS, [60, 90, 120, 180]);
+});
+
+test('nextRestSeconds: 巡回する（末尾の次は先頭）', () => {
+  assert.equal(nextRestSeconds(60), 90);
+  assert.equal(nextRestSeconds(90), 120);
+  assert.equal(nextRestSeconds(120), 180);
+  assert.equal(nextRestSeconds(180), 60);
+});
+
+test('nextRestSeconds: 一覧に無い値・不正な値は既定(90)の次から始める', () => {
+  // 既定は90秒なので、不正な値からは 90 の次(120)ではなく 90 そのものへ寄せる。
+  // 「壊れていたら既定に戻る」方が、利用者にとって予測しやすい。
+  for (const bad of [45, 0, -1, null, undefined, NaN, '90']) {
+    assert.equal(nextRestSeconds(bad), 90, `${String(bad)} は既定の90を返すべき`);
+  }
 });

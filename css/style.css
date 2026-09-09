@@ -48,6 +48,16 @@ body.timer-active { padding-bottom: calc(150px + var(--safe-bottom)); }
 .micro-secondary:empty { display: none; }
 
 #warnings:empty { display: none; }
+
+/* 新しいバージョンの通知。文言とボタン2つを1行に収める。
+   ボタンはタップ領域48pxを確保しつつ、警告文と同じ行に置くため横幅は内容任せ。
+   .warn.info と同じ配色を継承するので、danger の警告と取り違えない。 */
+/* 375px幅では、文言とボタン2つを1行に詰めるとボタンが 43x87px(幅が48px未満・
+   文字が2行に折り返す)になった。文言を1行目、ボタンを2行目に分ける。 */
+#updateBanner { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+#updateBanner span { flex: 1 1 100%; }
+#updateBanner button { flex: 1 1 0; min-width: 48px; min-height: 48px;
+  padding: 0 12px; font-size: 13px; white-space: nowrap; }
 .warn { font-size: 13px; padding: 6px 8px; border-radius: 6px; margin-top: 6px; }
 .warn.danger { background: #3a1218; color: #ffb3ba; border: 1px solid var(--danger); }
 /* 鉄と炎パレットに統一。以前はシアン時代の配色(info)や、金(--pb)に寄りすぎた

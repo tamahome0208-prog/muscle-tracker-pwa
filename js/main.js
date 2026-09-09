@@ -184,6 +184,51 @@ async function loadSeed() {
   }
 }
 
+/**
+ * 新しいバージョンが端末に届いたことを知らせる。
+ *
+ * 【なぜ必要か】sw.js はサブリソース(js/css/data)を stale-while-revalidate で
+ * 返すようにした。応答の返らない回線での起動を8.08秒から825msに縮めるための
+ * 判断だが、副作用としてデプロイの反映が「次回の起動」に一段遅れる。
+ * 利用者から見ると「更新したはずなのに変わらない」であり、
+ * これは私が入れた設計の代償なので、届いたことを見える形にする。
+ *
+ * 【なぜ controllerchange ではなく updatefound を見るか】
+ * 最初は controllerchange で判定したが、初回インストールが完了した直後にも
+ * 発火するため、**インストールした直後に「新しいバージョンがあります」と
+ * 出てしまった**(実測で確認)。何も更新していないのに更新を告げるのは、
+ * 警告の信頼を落とす典型的な誤報である。
+ *
+ * updatefound は「新しいSWがインストールを始めた」ときにだけ発火する。
+ * その時点で navigator.serviceWorker.controller が既に居れば、
+ * それは初回インストールではなく確実に更新である。
+ *
+ * 自動で再読み込みはしない。トレーニング中に画面が勝手に作り直されるのは危険で、
+ * セット記録のたびに localStorage へ保存しているとはいえ、
+ * 利用者の操作の途中で画面が飛ぶこと自体が事故のもとになる。
+ */
+function watchForUpdate(reg) {
+  if (!reg) return;
+
+  document.querySelector('#btnReloadUpdate')?.addEventListener('click', () => {
+    location.reload();
+  });
+  document.querySelector('#btnDismissUpdate')?.addEventListener('click', () => {
+    document.querySelector('#updateBanner')?.classList.add('hidden');
+  });
+
+  reg.addEventListener('updatefound', () => {
+    const incoming = reg.installing;
+    // controller が居ない = まだ誰も制御していない = 初回インストール。通知しない。
+    if (!incoming || !navigator.serviceWorker.controller) return;
+    incoming.addEventListener('statechange', () => {
+      // activated になって初めて、新しいキャッシュが使える状態になる。
+      if (incoming.state !== 'activated') return;
+      document.querySelector('#updateBanner')?.classList.remove('hidden');
+    });
+  });
+}
+
 async function boot() {
   // データの永続化を要求する(体の写真を含むIndexedDBを持つこのアプリは、Androidが
   // 空き容量不足時にサイトデータを削除する対象になりやすい)。API自体が無い環境・
@@ -230,7 +275,7 @@ async function boot() {
     initTabs();
 
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('sw.js').catch(() => {});
+      navigator.serviceWorker.register('sw.js').then(watchForUpdate).catch(() => {});
     }
 
     document.querySelectorAll('#tabbar button').forEach((btn) => {

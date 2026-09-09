@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PARTS, levelFromXp, addWorkoutXp, radarData, needsGameRebuild } from '../js/game.js';
+import { PARTS, levelFromXp, addWorkoutXp, radarData, needsGameRebuild, levelUps } from '../js/game.js';
 import { calcStreak, isInitialPhase, initialPhaseStatus } from '../js/game.js';
 import { BADGES, checkBadges, recomputeGame } from '../js/game.js';
 
@@ -459,4 +459,30 @@ test('needsGameRebuild: game が壊れていても例外を投げない', () => 
 test('needsGameRebuild: セットを持たない記録しか無ければ false（再構築しても何も得られない）', () => {
   const workouts = [{ id: 'w1', date: '2026-08-01', program: 'A', sets: [] }];
   assert.equal(needsGameRebuild({ bests: {}, xp: {} }, workouts), false);
+});
+
+// --- 完了サマリー用: 部位レベルが上がったか（levelUps） ---
+// XPは常に増えるが、レベルが上がるのは時々。上がった瞬間だけを拾って伝える。
+
+test('levelUps: レベルが上がった部位だけを返す', () => {
+  // levelFromXp = floor(sqrt(xp/100)) なので 100→Lv1, 400→Lv2, 900→Lv3
+  const before = { chest: 350, back: 850, leg: 100 };
+  const after = { chest: 450, back: 880, leg: 120 };
+  const ups = levelUps(before, after);
+  assert.deepEqual(ups, [{ part: 'chest', from: 1, to: 2 }]);
+});
+
+test('levelUps: 複数部位が同時に上がることもある', () => {
+  const ups = levelUps({ chest: 350, back: 850 }, { chest: 450, back: 950 });
+  assert.deepEqual(ups.map((u) => u.part).sort(), ['back', 'chest']);
+});
+
+test('levelUps: 何も上がらなければ空配列', () => {
+  assert.deepEqual(levelUps({ chest: 100 }, { chest: 150 }), []);
+});
+
+test('levelUps: 壊れた入力でも例外を投げない', () => {
+  assert.deepEqual(levelUps(null, { chest: 450 }), [{ part: 'chest', from: 0, to: 2 }]);
+  assert.deepEqual(levelUps({ chest: 450 }, null), []);
+  assert.deepEqual(levelUps(null, null), []);
 });

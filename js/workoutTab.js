@@ -1,10 +1,11 @@
-import { $, onShow, toast, vibrate, todayStr, newId, esc, icon } from './ui.js';
+import { $, onShow, toast, vibrate, todayStr, newId, esc, icon, showTab } from './ui.js';
 import {
   nextProgram, calcVolume, lastSetFor, isPB, updateBests, restorableSession, programStatus,
   nextWeightStep, setIndexInSession, suggestNextWeight,
-  nextRestSeconds, DEFAULT_REST_SECONDS
+  nextRestSeconds, DEFAULT_REST_SECONDS,
+  previousSameProgramVolume, changedBests
 } from './workout.js';
-import { addWorkoutXp, checkBadges, BADGES, calcStreak } from './game.js';
+import { addWorkoutXp, checkBadges, BADGES, calcStreak, levelUps, PART_LABELS } from './game.js';
 import { bodyweightAsOf } from './body.js';
 import { renderStatusBar } from './mealTab.js';
 
@@ -244,6 +245,76 @@ function openAddExerciseDialog() {
     toast(`${name} を追加しました`);
     renderWorkoutTab();
   });
+}
+
+/**
+ * 「終了して保存」の直後に出す完了サマリー。
+ *
+ * 【なぜ必要か】これまでは2秒で消えるトースト1行
+ * (「保存しました（総挙上量 2340kg）」)だけだった。
+ * トレを終えた瞬間は満足度が最も高い場面なのに、そこを捨てていた。
+ * 称号の解放トーストも他のトーストに上書きされて流れていた。
+ * XPも称号も積み上げているのに、**受け取る瞬間が用意されていない**。
+ *
+ * 出す材料は finishSession の時点で既に全部計算済みで、新たな計算は無い。
+ *
+ * 【前回比は同じプログラム同士で比べる】Aの日(胸肩三頭)とCの日(脚腹)では
+ * 扱う重量が桁違いで、比べても何も分からない(js/workout.js の
+ * previousSameProgramVolume 参照)。
+ *
+ * 【毎回は祝わない】自己ベスト・レベルアップ・称号は、無い日は行ごと出さない。
+ * 毎回同じ賛辞が出ると、本当に何かを達成した日と区別がつかなくなる。
+ */
+function renderSummary(s) {
+  const diff = s.previousVolume === null ? null : s.volume - s.previousVolume;
+  const pct = s.previousVolume ? Math.round((diff / s.previousVolume) * 100) : null;
+  const exName = (id) => s.exercises.find((e) => e.id === id)?.name ?? id;
+
+  const compareLine = diff === null
+    ? `<div class="muted">${esc(s.program)}の日はこれが最初の記録です。次回からは前回と比べられます。</div>`
+    : `<div class="muted">前回の${esc(s.program)}の日（${Math.round(s.previousVolume)}kg）と比べて
+        <span class="${diff >= 0 ? 'up' : 'down'}">${diff >= 0 ? '+' : ''}${Math.round(diff)}kg${pct === null ? '' : `（${pct >= 0 ? '+' : ''}${pct}%）`}</span></div>`;
+
+  const bestsLine = s.newBests.length === 0 ? '' : `
+    <div class="card card-secondary">
+      <h2 style="margin-top:0">${icon('i-crest')} 自己ベスト更新</h2>
+      ${s.newBests.map((id) => `<div>${esc(exName(id))}</div>`).join('')}
+    </div>`;
+
+  const upsLine = s.ups.length === 0 ? '' : `
+    <div class="card card-secondary">
+      <h2 style="margin-top:0">部位レベルが上がりました</h2>
+      ${s.ups.map((u) => `<div>${esc(PART_LABELS[u.part] ?? u.part)} Lv${u.from} から <span class="up">Lv${u.to}</span> へ</div>`).join('')}
+    </div>`;
+
+  const badgeLine = s.earned.length === 0 ? '' : `
+    <div class="card card-secondary">
+      <h2 style="margin-top:0">${icon('i-crest')} 称号を獲得</h2>
+      ${s.earned.map((id) => {
+        const b = BADGES.find((x) => x.id === id);
+        return b ? `<div>${esc(b.name)}<div class="muted">${esc(b.desc)}</div></div>` : '';
+      }).join('')}
+    </div>`;
+
+  $('#tab-workout').innerHTML = `
+    <div class="card card-primary">
+      <div class="muted">お疲れさまでした</div>
+      <div class="big">${Math.round(s.volume)} kg</div>
+      <div class="muted">【${esc(s.program)}】${esc(PROGRAM_NAMES[s.program] ?? '')} ・ ${s.setCount}セット</div>
+      ${compareLine}
+    </div>
+    ${bestsLine}
+    ${upsLine}
+    ${badgeLine}
+    <div class="card card-secondary">
+      <div class="muted">連続 ${s.streak} 週 ・ 次は【${esc(nextProgram(store.get('workouts')))}】</div>
+    </div>
+    <button id="btnSummaryDone" class="primary" style="width:100%">閉じる</button>`;
+
+  // このサマリーは使い捨ての画面。#tab-workout は再描画で作り直されるので
+  // onclick 代入でよい(ハンドラが積み重ならない)。
+  $('#tab-workout').onclick = null;
+  $('#btnSummaryDone').addEventListener('click', () => showTab('home'));
 }
 
 function programDaysLabel(status) {
@@ -606,8 +677,9 @@ function finishSession() {
   // 新規保存と移行済みデータで基準が食い違っていた。
   const bodyweight = bodyweightAsOf(store.get('body'), session.date, store.get('profile'));
   const volume = calcVolume(session.sets, { exercises, bodyweight });
+  const savedId = newId('w');
   workouts.push({
-    id: newId('w'),
+    id: savedId,
     date: session.date,
     program: session.program,
     sets: session.sets,
@@ -625,6 +697,10 @@ function finishSession() {
   }
 
   const game = store.get('game');
+  // サマリーで「今日更新した自己ベスト」「上がった部位レベル」を出すため、
+  // 変更前の値を控えておく(updateBests / addWorkoutXp は何が変わったかを教えない)。
+  const bestsBefore = game.bests;
+  const xpBefore = game.xp;
   let bests = game.bests;
   for (const s of session.sets) bests = updateBests(bests, s.exId, s.weight, s.reps, session.date);
   const xp = addWorkoutXp(game.xp, { sets: session.sets }, exercises, bodyweight);
@@ -645,21 +721,28 @@ function finishSession() {
     toast('保存できませんでした（端末の空き容量を確認してください）。トレーニング記録自体は保存されています');
   }
 
-  for (const id of earned) {
-    const badge = BADGES.find((b) => b.id === id);
-    if (badge) toast(`称号解放「${badge.name}」`, 3000, '', 'i-crest');
-  }
-
   clearInterval(timerId);
   removeTimer();
   releaseWakeLock();
-  toast(`保存しました（総挙上量 ${Math.round(volume)}kg）`);
+
+  // サマリーに必要な材料を、session を捨てる前に取り出しておく
+  const summary = {
+    program: session.program,
+    volume,
+    setCount: session.sets.length,
+    previousVolume: previousSameProgramVolume(workouts, session.program, savedId),
+    newBests: changedBests(bestsBefore, bests),
+    ups: levelUps(xpBefore, xp),
+    earned,
+    streak,
+    exercises
+  };
   session = null;
   // 終了して保存できたので、復元用に持っていた進行中セッションは消してよい。
   // 消せなくても(容量逼迫等)致命的ではない: date が過去日として扱われれば
   // 次回起動時に restorableSession が古いものとして破棄する。
   try { store.set('session', EMPTY_SESSION); } catch { /* 無視してよい */ }
-  renderWorkoutTab();
+  renderSummary(summary);
   // トレーニングを保存すると直近7日の運動消費(js/energy.js の dailyExerciseKcal)が
   // 増え、EAフロア(30 × FFM + 運動消費)が上がる。つまり「今日はもっと食べないと
   // いけない」状態に変わったということなので、ステータスバーを描き直して

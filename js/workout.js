@@ -267,6 +267,40 @@ export function suggestNextWeight({ workouts, ex, step }) {
   return { weight: next, reason: clearedAll ? 'increase' : 'hold', from: heaviest };
 }
 
+/**
+ * 同じプログラムの直近の総挙上量。無ければ null。
+ * excludeId には「今保存したばかりの記録のID」を渡す(自分自身と比べないため)。
+ *
+ * 完了サマリー(js/workoutTab.js)で「前回のAの日と比べてどうか」を示すために使う。
+ * プログラムを揃えないと意味が無い — Aの日(胸肩三頭)とCの日(脚腹)では
+ * 扱う重量が桁違いで、比べても何も分からない。
+ */
+export function previousSameProgramVolume(workouts, program, excludeId = null) {
+  const sorted = sortedByDate(
+    (workouts ?? []).filter((w) => isValidDateStr(w?.date) && w.program === program && w.id !== excludeId)
+  );
+  if (sorted.length === 0) return null;
+  const v = Number(sorted[sorted.length - 1].volume);
+  return Number.isFinite(v) ? v : null;
+}
+
+/**
+ * 自己ベストが更新された種目のIDを返す。
+ *
+ * updateBests は新しいオブジェクトを返すだけで「何が変わったか」は教えない。
+ * 完了サマリーで「今日更新した自己ベスト」を並べるために、前後を比べる。
+ */
+export function changedBests(before, after) {
+  const prev = before && typeof before === 'object' ? before : {};
+  const next = after && typeof after === 'object' ? after : {};
+  return Object.keys(next).filter((exId) => {
+    const a = prev[exId];
+    const b = next[exId];
+    if (!a) return true;
+    return Number(a.weight) !== Number(b.weight) || Number(a.reps) !== Number(b.reps);
+  });
+}
+
 /** 重量優先、同重量なら回数で自己ベストを判定する */
 export function isPB(bests, exId, weight, reps) {
   const best = bests[exId];

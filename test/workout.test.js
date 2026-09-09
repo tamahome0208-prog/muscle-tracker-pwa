@@ -29,6 +29,8 @@ import {
   suggestNextWeight,
   REST_STEPS,
   nextRestSeconds,
+  previousSameProgramVolume,
+  changedBests,
   PROGRAMS
 } from '../js/workout.js';
 import { bodyweightAsOf } from '../js/body.js';
@@ -1040,4 +1042,61 @@ test('nextRestSeconds: 一覧に無い値・不正な値は既定(90)の次か�
   for (const bad of [45, 0, -1, null, undefined, NaN, '90']) {
     assert.equal(nextRestSeconds(bad), 90, `${String(bad)} は既定の90を返すべき`);
   }
+});
+
+// --- 完了サマリーの材料（previousSameProgramVolume / changedBests） ---
+// 「終了して保存」を押した瞬間はトレの満足度が最も高い場面なのに、
+// これまでは2秒で消えるトースト1行しか出していなかった。
+// 材料は finishSession の時点で全部そろっているので、それを組み立てる。
+
+test('previousSameProgramVolume: 同じプログラムの直近の総挙上量を返す', () => {
+  const workouts = [
+    { id: 'a1', date: '2026-08-01', program: 'A', sets: [], volume: 1000 },
+    { id: 'b1', date: '2026-08-03', program: 'B', sets: [], volume: 9999 },
+    { id: 'a2', date: '2026-08-05', program: 'A', sets: [], volume: 1200 }
+  ];
+  assert.equal(previousSameProgramVolume(workouts, 'A'), 1200);
+  assert.equal(previousSameProgramVolume(workouts, 'B'), 9999);
+});
+
+test('previousSameProgramVolume: 除外IDを渡すとその記録を無視する（保存直後の自分自身）', () => {
+  const workouts = [
+    { id: 'a1', date: '2026-08-01', program: 'A', sets: [], volume: 1000 },
+    { id: 'a2', date: '2026-08-05', program: 'A', sets: [], volume: 1200 }
+  ];
+  // 今 a2 を保存したところ。比較相手は a1 でなければならない。
+  assert.equal(previousSameProgramVolume(workouts, 'A', 'a2'), 1000);
+});
+
+test('previousSameProgramVolume: 同じプログラムの過去記録が無ければ null', () => {
+  const workouts = [{ id: 'b1', date: '2026-08-03', program: 'B', sets: [], volume: 500 }];
+  assert.equal(previousSameProgramVolume(workouts, 'A'), null);
+  assert.equal(previousSameProgramVolume([], 'A'), null);
+  assert.equal(previousSameProgramVolume(null, 'A'), null);
+});
+
+test('previousSameProgramVolume: 壊れたレコード・不正な日付を読み飛ばす', () => {
+  const workouts = [
+    null,
+    { id: 'x', date: 'いつか', program: 'A', volume: 9999 },
+    { id: 'a1', date: '2026-08-01', program: 'A', sets: [], volume: 1000 }
+  ];
+  assert.equal(previousSameProgramVolume(workouts, 'A'), 1000);
+});
+
+test('changedBests: 更新された種目のIDだけを返す', () => {
+  const before = { chest: { weight: 20, reps: 10 }, back: { weight: 30, reps: 10 } };
+  const after = { chest: { weight: 22.5, reps: 10 }, back: { weight: 30, reps: 10 }, leg: { weight: 50, reps: 10 } };
+  assert.deepEqual(changedBests(before, after).sort(), ['chest', 'leg']);
+});
+
+test('changedBests: 何も変わらなければ空配列', () => {
+  const b = { chest: { weight: 20, reps: 10 } };
+  assert.deepEqual(changedBests(b, { ...b }), []);
+});
+
+test('changedBests: 壊れた入力でも例外を投げない', () => {
+  assert.deepEqual(changedBests(null, { chest: { weight: 20, reps: 10 } }), ['chest']);
+  assert.deepEqual(changedBests({ chest: { weight: 20, reps: 10 } }, null), []);
+  assert.deepEqual(changedBests(null, null), []);
 });

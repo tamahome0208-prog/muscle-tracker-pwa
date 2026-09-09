@@ -8,7 +8,7 @@
 // MUTATION: js/nutrition.js:DEFAULT_DAY_OVER_HOUR 22->20 => 期待失敗 2件
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { dayTotals, achievement, sortFoodsByUse, bumpFoodUse, isDayOver, DEFAULT_DAY_OVER_HOUR, daysSinceLastMealLog, MEAL_LOG_GAP_DAYS } from '../js/nutrition.js';
+import { dayTotals, achievement, sortFoodsByUse, bumpFoodUse, isDayOver, DEFAULT_DAY_OVER_HOUR, daysSinceLastMealLog, MEAL_LOG_GAP_DAYS, lastMealInSlot } from '../js/nutrition.js';
 import { estimateFfmKg } from '../js/energy.js';
 
 const TARGETS = { protein: 100, kcalMin: 1700, kcalMax: 1800, kcalFloor: 1500, alcoholMl: 500 };
@@ -501,4 +501,70 @@ test('achievement: 残量が正なら従来どおり「残り◯kcal」を出す
 test('achievement: ちょうど下限に達したときも「残り0kcal」を出さない', () => {
   const a = achievement({ kcal: TARGETS.kcalMin, protein: 100, alcoholMl: 0 }, TARGETS, { dayOver: false });
   assert.equal(a.warnings.find((w) => w.type === 'kcalRemaining'), undefined);
+});
+
+// --- 直近の同じ時間帯の食事をもう一度記録する（lastMealInSlot） ---
+// このユーザーは「朝プロテイン＋夕食1食」で、夕食の内容は繰り返されやすい。
+// 毎回3〜4品を個別にタップするのは手間で、記録の手間は挫折の主因として
+// 繰り返し挙げられている。
+//
+// 【「セット」を作らせるのではなく「前回と同じ」にした理由】
+// セットの登録・命名・編集というUIを作ると、それ自体が手間になる。
+// 実際に必要なのは「いつもの組み合わせをもう一度」であり、
+// それは直近の同じ時間帯の記録をそのまま使えば足りる。新しいデータ構造も要らない。
+
+test('lastMealInSlot: 直近の同じ時間帯(夜)の食事の品目を返す', () => {
+  const meals = [
+    { id: 'a', datetime: '2026-08-17T19:30', items: [{ name: '唐揚げ', kcal: 600, protein: 35 }] },
+    { id: 'b', datetime: '2026-08-18T07:00', items: [{ name: 'プロテイン', kcal: 120, protein: 24 }] },
+    { id: 'c', datetime: '2026-08-18T19:00', items: [
+      { name: '鮭', kcal: 200, protein: 22 }, { name: 'ごはん', kcal: 234, protein: 4 }
+    ] }
+  ];
+  const r = lastMealInSlot(meals, 19, '2026-08-19');
+  assert.equal(r.items.length, 2);
+  assert.deepEqual(r.items.map((i) => i.name), ['鮭', 'ごはん']);
+  assert.equal(r.date, '2026-08-18');
+});
+
+test('lastMealInSlot: 時間帯が違う記録は拾わない（朝の時間に夜の食事を出さない）', () => {
+  const meals = [
+    { id: 'a', datetime: '2026-08-18T19:00', items: [{ name: '夕食', kcal: 800, protein: 50 }] }
+  ];
+  // 朝7時に問い合わせても、夜の記録は返さない
+  assert.equal(lastMealInSlot(meals, 7, '2026-08-19'), null);
+});
+
+test('lastMealInSlot: 今日の記録は対象外（同じ日にもう一度出しても意味が無い）', () => {
+  const meals = [
+    { id: 'a', datetime: '2026-08-19T19:00', items: [{ name: '今日の夕食', kcal: 800, protein: 50 }] }
+  ];
+  assert.equal(lastMealInSlot(meals, 19, '2026-08-19'), null);
+});
+
+test('lastMealInSlot: 前後2時間までを同じ時間帯とみなす', () => {
+  const meals = [{ id: 'a', datetime: '2026-08-18T21:00', items: [{ name: 'x', kcal: 1, protein: 1 }] }];
+  assert.ok(lastMealInSlot(meals, 19, '2026-08-19'), '21時は19時の±2時間以内');
+  assert.equal(lastMealInSlot(meals, 12, '2026-08-19'), null, '12時とは9時間離れている');
+});
+
+test('lastMealInSlot: 品目が空の記録は返さない（1タップしても何も入らない）', () => {
+  const meals = [{ id: 'a', datetime: '2026-08-18T19:00', items: [] }];
+  assert.equal(lastMealInSlot(meals, 19, '2026-08-19'), null);
+});
+
+test('lastMealInSlot: 壊れたレコードを読み飛ばす', () => {
+  const meals = [
+    null,
+    { id: 'x', items: [{ name: 'y', kcal: 1, protein: 1 }] },
+    { id: 'z', datetime: '2026-08-18T19:00', items: 'garbage' },
+    { id: 'ok', datetime: '2026-08-18T19:00', items: [{ name: '鮭', kcal: 200, protein: 22 }] }
+  ];
+  const r = lastMealInSlot(meals, 19, '2026-08-19');
+  assert.equal(r.items[0].name, '鮭');
+});
+
+test('lastMealInSlot: 記録が無ければ null', () => {
+  assert.equal(lastMealInSlot([], 19, '2026-08-19'), null);
+  assert.equal(lastMealInSlot(null, 19, '2026-08-19'), null);
 });

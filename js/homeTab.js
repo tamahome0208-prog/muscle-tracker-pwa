@@ -11,6 +11,8 @@ import { estimateFfmKg, dailyExerciseKcal, energyAvailability } from './energy.j
 import { EA_EMERGENCY_PER_KG_FFM } from './goals.js';
 import { analyzeInbody, OcrError } from './ocr.js';
 import { shouldShowBackupReminder } from './backupReminder.js';
+import { shouldShowPhotoReminder } from './photoReminder.js';
+import { listPhotoDates } from './photos.js';
 
 const PROGRAM_NAMES = { A: '胸・肩・三頭', B: '背中・二頭', C: '脚・腹' };
 
@@ -133,6 +135,73 @@ export function renderHomeTab() {
   });
   $('#btnBadminton').addEventListener('click', recordBadminton);
   $('#btnInbody').addEventListener('click', recordBody);
+
+  // 写真の日付は IndexedDB への非同期問い合わせが必要なので、
+  // 上の同期的な描画が終わってから差し込む(js/recordTab.js の
+  // fillCalendarPhotos と同じ方針。失敗しても他のカードは表示済み)。
+  fillPhotoReminder(profile, settings, today);
+}
+
+/**
+ * 体の進捗写真の撮影リマインダー。判定は js/photoReminder.js。
+ *
+ * 【なぜ非同期で後から差し込むか】写真は IndexedDB にあり、件数も日付も
+ * 同期的には取れない。ホーム全体をその待ちに巻き込むと、
+ * 起動から操作可能になるまでの時間(R4.7.6)を写真の問い合わせが左右してしまう。
+ *
+ * Blobは受け取らない(日付だけ)。写真の実体をこのモジュールのスコープに
+ * 入れないため(R2.7.4)。
+ */
+async function fillPhotoReminder(profile, settings, today) {
+  let lastPhotoDate = null;
+  try {
+    const dates = [...(await listPhotoDates())].sort();
+    lastPhotoDate = dates.length ? dates[dates.length - 1] : null;
+  } catch (err) {
+    // 写真を読めなくてもホームは既に描画済み。促せないだけなので黙って諦める。
+    console.warn('写真の日付を読み込めませんでした:', err);
+    return;
+  }
+  if (!shouldShowPhotoReminder(lastPhotoDate, profile.startDate, settings, today)) return;
+
+  const host = $('#tab-home');
+  if (!host) return; // 待っている間に別タブへ移った
+
+  // 【重複を防ぐ】この関数は非同期で、待っている間に renderHomeTab がもう一度
+  // 走ることがある。実際 js/main.js の boot() は initTabs() と refreshCurrentTab() で
+  // ホームを2回描画するため、両方の待ちが解けた時点でカードが2枚差し込まれていた
+  // (同じidの要素が2つ = 不正なHTMLで、片方を閉じてももう片方が残る)。
+  // 同期的に innerHTML を組み立てるカード(安全カード・バックアップ)は
+  // 再描画で丸ごと作り直されるので起きないが、後から append するものは自分で防ぐ。
+  host.querySelector('#photoReminderCard')?.remove();
+
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.id = 'photoReminderCard';
+  card.innerHTML = `
+    <h2 style="margin-top:0">${icon('i-camera')} 写真を撮りませんか</h2>
+    <p class="muted">${lastPhotoDate
+      ? `前回の撮影から${Math.round((new Date(`${today}T00:00:00Z`) - new Date(`${lastPhotoDate}T00:00:00Z`)) / 86400000)}日経ちました。`
+      : 'まだ体の写真がありません。'}
+      体重や体脂肪率の数字は測定のばらつきに埋もれますが、写真は数ヶ月で明確に変わります。
+      同じアングル・同じ場所で撮ると比べられます。</p>
+    <div class="chips">
+      <button id="btnGoPhoto" class="primary">撮影する</button>
+      <button id="btnDismissPhoto">あとで</button>
+    </div>`;
+  // 「今日やること」の次に置く。最重要カードの前には割り込ませない。
+  host.firstElementChild?.after(card);
+
+  card.querySelector('#btnGoPhoto').addEventListener('click', () => showTab('photo'));
+  card.querySelector('#btnDismissPhoto').addEventListener('click', () => {
+    try {
+      store.set('settings', { ...store.get('settings'), photoReminderDismissedAt: today });
+    } catch {
+      toast('保存できませんでした（端末の空き容量を確認してください）');
+      return;
+    }
+    card.remove();
+  });
 }
 
 /**

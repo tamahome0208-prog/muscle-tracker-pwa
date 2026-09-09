@@ -125,6 +125,48 @@ export const DEFAULT_DAY_OVER_HOUR = 22;
  */
 export const MEAL_LOG_GAP_DAYS = 3;
 
+/** 「同じ時間帯」とみなす前後の幅(時間)。19時に対して17〜21時を同じ夕食帯として扱う */
+const SLOT_TOLERANCE_HOURS = 2;
+
+/**
+ * 直近の「同じ時間帯」の食事を返す。無ければ null。
+ *
+ * 【なぜ必要か】このユーザーは「朝プロテイン＋夕食1食」で、夕食の内容は
+ * 繰り返されやすい。それを毎回3〜4品ずつ個別にタップするのは手間で、
+ * 記録の手間は挫折の主因として繰り返し挙げられている。
+ *
+ * 【「セット」を作らせるのではなく「前回と同じ」にした理由】
+ * よく食べる組み合わせを登録・命名・編集するUIを作ると、**それ自体が手間**になる。
+ * 実際に必要なのは「いつもの組み合わせをもう一度」であり、
+ * それは直近の同じ時間帯の記録をそのまま使えば足りる。
+ * 新しいデータ構造も、管理画面も要らない。
+ *
+ * 【今日の記録は対象外】同じ日の食事をもう一度出しても、それは
+ * 「いつもの」ではなく単なる重複記録になる。
+ *
+ * meals は storage / importAll 由来の未検証データなので、壊れたレコードは
+ * 例外を投げずに読み飛ばす(dayTotals と同じ方針)。
+ *
+ * 戻り値: { date, items } または null
+ */
+export function lastMealInSlot(meals, nowHour, todayStr) {
+  if (!Array.isArray(meals) || typeof todayStr !== 'string') return null;
+  const hour = Number(nowHour);
+  if (!Number.isFinite(hour)) return null;
+
+  let best = null;
+  for (const m of meals) {
+    if (!m || typeof m.datetime !== 'string' || !Array.isArray(m.items) || m.items.length === 0) continue;
+    const [date, time = ''] = m.datetime.split('T');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+    if (date >= todayStr) continue; // 今日以降は対象外
+    const h = Number(time.slice(0, 2));
+    if (!Number.isFinite(h) || Math.abs(h - hour) > SLOT_TOLERANCE_HOURS) continue;
+    if (best === null || m.datetime > best.datetime) best = m;
+  }
+  return best === null ? null : { date: best.datetime.slice(0, 10), items: best.items };
+}
+
 /**
  * 最後に食事を記録した日から todayStr までの日数。記録が1件も無ければ null。
  * 壊れたレコード・未来日付は読み飛ばす(dayTotals と同じ防御方針)。

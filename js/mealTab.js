@@ -1,5 +1,5 @@
 import { $, onShow, toast, todayStr, nowStr, newId, esc, icon, confirmSend } from './ui.js';
-import { dayTotals, achievement, sortFoodsByUse, bumpFoodUse, isDayOver } from './nutrition.js';
+import { dayTotals, achievement, sortFoodsByUse, bumpFoodUse, isDayOver, lastMealInSlot } from './nutrition.js';
 import { isBarcodeSupported, scanJan, lookupJan } from './barcode.js';
 import { analyzeMealPhoto, analyzeReceipt, OcrError } from './ocr.js';
 import { estimateFfmKg, dailyExerciseKcal, macroTargets, estimateMaintenance, equationMaintenanceEstimate } from './energy.js';
@@ -332,6 +332,36 @@ export function addItems(items, source, datetime) {
   return true;
 }
 
+/**
+ * 「前回と同じ」カード。直近の同じ時間帯の食事を1タップでもう一度記録する。
+ *
+ * 【なぜセット登録ではなくこの形か】よく食べる組み合わせを登録・命名・編集する
+ * UIを作ると、**それ自体が手間**になる。実際に必要なのは
+ * 「いつもの組み合わせをもう一度」であり、それは直近の同じ時間帯の記録を
+ * そのまま使えば足りる(js/nutrition.js の lastMealInSlot)。
+ * 新しいデータ構造も管理画面も要らない。
+ *
+ * 該当が無ければカードごと出さない。空のカードが常設されていると、
+ * 画面の情報密度だけが下がる。
+ */
+function renderRepeatCard(meals, today) {
+  const last = lastMealInSlot(meals, new Date().getHours(), today);
+  if (!last) return '';
+  const total = last.items.reduce(
+    (a, i) => ({ kcal: a.kcal + (Number(i.kcal) || 0), protein: a.protein + (Number(i.protein) || 0) }),
+    { kcal: 0, protein: 0 }
+  );
+  return `
+    <div class="card">
+      <h2 style="margin-top:0">前回と同じ</h2>
+      <p class="muted">${esc(last.date)} のこの時間帯に記録した${last.items.length}品です。</p>
+      <button id="btnRepeatMeal" class="primary" style="width:100%;text-align:left">
+        ${esc(last.items.map((i) => i.name).join('、'))}
+        <br><span class="muted">${Math.round(total.kcal)}kcal / P${Math.round(total.protein)}g</span>
+      </button>
+    </div>`;
+}
+
 export function renderMealTab() {
   const foods = sortFoodsByUse(store.get('foods'));
   const today = todayStr();
@@ -343,6 +373,7 @@ export function renderMealTab() {
     .filter((m) => m.datetime.startsWith(today));
 
   $('#tab-meal').innerHTML = `
+    ${renderRepeatCard(store.get('meals'), today)}
     <div class="card">
       <h2 style="margin-top:0">ワンタップ登録</h2>
       <div class="chips" id="foodChips">
@@ -380,6 +411,17 @@ export function renderMealTab() {
   });
 
   // #tab-meal は再描画されても要素自体は残るため、addEventListener だと
+  // 「前回と同じ」は該当が無ければ描画されないので、要素の有無を確認してから繋ぐ。
+  document.querySelector('#btnRepeatMeal')?.addEventListener('click', () => {
+    const last = lastMealInSlot(store.get('meals'), new Date().getHours(), todayStr());
+    if (!last) return;
+    // 元の記録の品目をそのまま複製する(参照を共有すると、片方を編集したときに
+    // 過去の記録まで変わる)。addItems は source を記録に残す。
+    if (addItems(last.items.map((i) => ({ ...i })), 'repeat')) {
+      toast(`${last.items.length}品を記録しました`);
+    }
+  });
+
   // 描画のたびにハンドラが積み重なる。onclick 代入で常に1つに保つ
   $('#tab-meal').onclick = (e) => {
     const del = e.target.closest('[data-del]');

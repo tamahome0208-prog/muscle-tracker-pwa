@@ -112,7 +112,10 @@ export const DEFAULTS = deepFreeze({
     lastExportDate: null,
     // バックアップリマインダー(js/homeTab.js)を最後に「あとで」で閉じた日。
     // 閉じてから一定期間(js/backupReminder.js の REMINDER_INTERVAL_DAYS)は再表示しない。
-    backupReminderDismissedAt: null
+    backupReminderDismissedAt: null,
+    // 体の写真の撮影リマインダー(js/photoReminder.js)を最後に「あとで」で閉じた日。
+    // 閉じてから PHOTO_INTERVAL_DAYS は再表示しない。
+    photoReminderDismissedAt: null
   },
   // 進行中（未終了）のトレーニングセッション。Androidがバックグラウンドで
   // ページを破棄しても記録済みのセットを失わないための永続化用の場所。

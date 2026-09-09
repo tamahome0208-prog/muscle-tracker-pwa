@@ -209,6 +209,64 @@ export function lastSetFor(workouts, exId) {
   return null;
 }
 
+/**
+ * 今日その種目でやる重量を提案する。履歴が無ければ null(提案しない)。
+ *
+ * 【なぜ必要か】画面は「前回 31.25×10」と「31.25kg×10 を超えると自己ベスト」
+ * までは出すが、**いくつにするかは利用者が毎種目考えている**。
+ * ジムで6種目ぶんこれをやるのは地味に負荷で、決めきれないと前回と同じ重量を
+ * 惰性で続けることになる(漸進性過負荷が止まる)。
+ *
+ * 【方式: ダブルプログレッション】広く使われる標準的な漸進法。
+ *   前回、目標セット数すべてを目標回数でこなせていたら1刻み上げる。
+ *   1セットでも届かなければ据え置き。
+ * 判断基準が1行で説明でき、利用者が「なぜこの数字か」を追える。
+ *
+ * 【基準にするのはその日の最も重いセット】20→22.5→25 と上げていった日は、
+ * 25kgでの達成状況で判断する(軽いセットを基準にすると、実際には1セットしか
+ * 挙げていない重量から更に上げてしまう)。
+ *
+ * 【自動で適用してはならない】戻り値を入力欄へ勝手に入れないこと。
+ * 気づかず✓を押すと「実際には挙げていない重量」が記録され、
+ * 自己ベスト・総挙上量・部位XPのすべてが実態から外れる。
+ * 提案はタップして初めて反映されること(js/workoutTab.js 参照)。
+ *
+ * workouts は storage / importAll 由来の未検証データなので、
+ * 壊れたレコードは例外を投げずに読み飛ばす。
+ *
+ * 戻り値: { weight, reason: 'increase' | 'hold', from } または null
+ */
+export function suggestNextWeight({ workouts, ex, step }) {
+  if (!ex || typeof ex.id !== 'string') return null;
+  const stepKg = Number(step);
+  if (!Number.isFinite(stepKg) || stepKg <= 0) return null;
+
+  // 直近でその種目を含むワークアウトを1件だけ探す
+  const sorted = sortedByDate(workouts ?? []).reverse();
+  let sets = null;
+  for (const w of sorted) {
+    if (!isValidDateStr(w?.date) || !Array.isArray(w.sets)) continue;
+    const mine = w.sets.filter((s) => s?.exId === ex.id);
+    if (mine.length > 0) { sets = mine; break; }
+  }
+  if (!sets) return null;
+
+  const heaviest = Math.max(...sets.map((s) => Number(s.weight) || 0));
+  const atHeaviest = sets.filter((s) => (Number(s.weight) || 0) === heaviest);
+  const targetSets = Number(ex.sets) || 3;
+  const targetReps = Number(ex.defaultReps) || 10;
+
+  const clearedAll =
+    atHeaviest.length >= targetSets &&
+    atHeaviest.every((s) => (Number(s.reps) || 0) >= targetReps);
+
+  // 1.25kg刻みで足すと 21.250000000000004 のような値が出る。
+  // 表示にも session.sets にも入る数値なので小数第2位で丸める
+  // (js/workoutTab.js の round2 と同じ理由)。
+  const next = clearedAll ? Math.round((heaviest + stepKg) * 100) / 100 : heaviest;
+  return { weight: next, reason: clearedAll ? 'increase' : 'hold', from: heaviest };
+}
+
 /** 重量優先、同重量なら回数で自己ベストを判定する */
 export function isPB(bests, exId, weight, reps) {
   const best = bests[exId];

@@ -1,7 +1,7 @@
 import { $, onShow, toast, vibrate, todayStr, newId, esc, icon } from './ui.js';
 import {
   nextProgram, calcVolume, lastSetFor, isPB, updateBests, restorableSession, programStatus,
-  nextWeightStep, setIndexInSession
+  nextWeightStep, setIndexInSession, suggestNextWeight
 } from './workout.js';
 import { addWorkoutXp, checkBadges, BADGES, calcStreak } from './game.js';
 import { bodyweightAsOf } from './body.js';
@@ -288,6 +288,7 @@ function renderExercise(ex, workouts, bests) {
         <span class="ex-last">${last ? `前回 ${last.weight}×${last.reps}` : '初回'}</span>
       </div>
       ${hint ? `<div class="ex-last pb-hint">${hint}</div>` : ''}
+      ${renderSuggestion(ex, workouts, step, doneCount)}
       <div class="ex-ctrl">
         <button data-act="w-" aria-label="${esc(ex.name)} 重量を${step}kg減らす">−</button>
         <span class="num" data-field="weight">${weight}</span><span class="muted">kg</span>
@@ -308,6 +309,36 @@ function renderExercise(ex, workouts, bests) {
         <button class="stepbtn" data-act="step" aria-label="${esc(ex.name)} 重量の刻みを変更（現在${step}kg）">${step}kg刻み</button>
       </div>
     </div>`;
+}
+
+/**
+ * 「今日はこの重量で」の提案。タップすると入力欄に反映される。
+ *
+ * 【自動では入れない】提案した重量を最初から入力欄に入れてはならない。
+ * 気づかず✓を押すと「実際には挙げていない重量」が記録され、
+ * 自己ベスト・総挙上量・部位XPのすべてが実態から外れる。
+ * 既定は従来どおり「前回の重量」で、提案はタップして初めて入る。
+ *
+ * 【既に今回のセットを記録し始めていたら出さない】途中で提案が出ていると、
+ * 押し間違えて進行中のセットの重量を変えてしまう。
+ *
+ * 「据え置き」の提案は出さない。前回と同じ重量は入力欄の初期値と同じなので、
+ * タップする意味が無いボタンを毎種目に並べても画面が重くなるだけ。
+ * ただし「なぜ上げないのか」は伝える価値があるので、文言だけ小さく添える。
+ */
+function renderSuggestion(ex, workouts, step, doneCount) {
+  if (doneCount > 0) return '';
+  const s = suggestNextWeight({ workouts, ex, step });
+  if (!s) return '';
+  if (s.reason === 'hold') {
+    return `<div class="ex-last">前回は${s.from}kgで目標の${ex.sets}セット×${ex.defaultReps}回に届いていません。同じ重量でもう一度。</div>`;
+  }
+  return `<div class="ex-ctrl">
+    <button class="suggestbtn" data-act="apply-suggestion" data-weight="${s.weight}"
+      aria-label="${esc(ex.name)} 今日の推奨重量 ${s.weight}kg を入力する">
+      今日は ${s.weight}kg（前回${s.from}kgで${ex.sets}セット完遂）
+    </button>
+  </div>`;
 }
 
 /**
@@ -385,6 +416,8 @@ function onExerciseClick(e) {
     case 'r+': repsEl.textContent = Number(repsEl.textContent) + 1; break;
     case 'r-': repsEl.textContent = Math.max(1, Number(repsEl.textContent) - 1); break;
     case 'step': cycleWeightStep(exId, step); break;
+    // 提案をタップしたときだけ入力欄へ反映する(自動では入れない)
+    case 'apply-suggestion': weightEl.textContent = round2(Number(btn.dataset.weight)); break;
     case 'set': toggleSet(btn, exId, Number(weightEl.textContent), Number(repsEl.textContent)); break;
   }
 }
@@ -463,10 +496,14 @@ function undoSet(btn, exId) {
 function recordSet(btn, exId, weight, reps) {
   if (btn.classList.contains('done')) return;
   btn.classList.add('done');
-  // recordSet は1タップの速さを保つため再描画しない。そのぶん、ボタンの状態を
-  // 表す属性はここで自分で更新する必要がある。これを忘れると、記録済みなのに
+  // recordSet は1タップの速さを保つため再描画しない。そのぶん、画面の状態は
+  // ここで自分で揃える必要がある。これを忘れると、記録済みなのに
   // 読み上げは「セット2を記録する」のまま残り、押すと実際には取り消される。
   setButtonState(btn, true);
+  // 「今日はこの重量で」の提案は、その種目を始める前の助言。1セットでも記録したら
+  // 役目を終える。残しておくと、進行中に押して次のセットの重量が変わりうる。
+  // (renderSuggestion は doneCount>0 で出さないが、ここは再描画を通らない)
+  btn.closest('.ex')?.querySelector('.suggestbtn')?.closest('.ex-ctrl')?.remove();
   session.sets.push({ exId, weight, reps });
   persistSession();
   acquireWakeLock(); // 意図的にawaitしない: 失敗・非対応でもセット記録自体は止めない

@@ -26,6 +26,7 @@ import {
   WEIGHT_STEPS,
   nextWeightStep,
   setIndexInSession,
+  suggestNextWeight,
   PROGRAMS
 } from '../js/workout.js';
 import { bodyweightAsOf } from '../js/body.js';
@@ -915,4 +916,103 @@ test('setIndexInSession: 壊れた要素を読み飛ばしても、返すのは�
   const sets = [null, { exId: 'chest', weight: 20, reps: 10 }, { noExId: true }, { exId: 'chest', weight: 25, reps: 8 }];
   assert.equal(setIndexInSession(sets, 'chest', 0), 1);
   assert.equal(setIndexInSession(sets, 'chest', 1), 3);
+});
+
+// --- 今日やる重量の提案（suggestNextWeight） ---
+// 画面は「前回 31.25×10」「31.25kg×10 を超えると自己ベスト」までは出すが、
+// **いくつにするかは利用者が毎種目考えている**。ジムで6種目ぶんこれをやるのは負荷。
+//
+// 方式はダブルプログレッション(広く使われる標準的な漸進法):
+//   前回、全セットを目標回数でこなせていたら1刻み上げる。届かなければ据え置き。
+//
+// 【自動では適用しない】提案した重量を勝手に入力欄へ入れてはならない。
+// 気づかず✓を押すと「やっていない重量」が記録される。提案はタップして初めて入る。
+
+const SUGGEST_EX = { id: 'chest', sets: 3, defaultReps: 10 };
+
+const workoutWith = (date, sets) => ({ id: `w-${date}`, date, program: 'A', sets });
+
+test('suggestNextWeight: 前回すべてのセットを目標回数でこなせていたら1刻み上げる', () => {
+  const workouts = [workoutWith('2026-08-01', [
+    { exId: 'chest', weight: 20, reps: 10 },
+    { exId: 'chest', weight: 20, reps: 10 },
+    { exId: 'chest', weight: 20, reps: 10 }
+  ])];
+  const r = suggestNextWeight({ workouts, ex: SUGGEST_EX, step: 2.5 });
+  assert.equal(r.weight, 22.5);
+  assert.equal(r.reason, 'increase');
+});
+
+test('suggestNextWeight: 1セットでも目標回数に届かなければ据え置き', () => {
+  const workouts = [workoutWith('2026-08-01', [
+    { exId: 'chest', weight: 20, reps: 10 },
+    { exId: 'chest', weight: 20, reps: 10 },
+    { exId: 'chest', weight: 20, reps: 8 }
+  ])];
+  const r = suggestNextWeight({ workouts, ex: SUGGEST_EX, step: 2.5 });
+  assert.equal(r.weight, 20);
+  assert.equal(r.reason, 'hold');
+});
+
+test('suggestNextWeight: セット数が足りなければ据え置き（3セット中2セットで終えた）', () => {
+  const workouts = [workoutWith('2026-08-01', [
+    { exId: 'chest', weight: 20, reps: 10 },
+    { exId: 'chest', weight: 20, reps: 10 }
+  ])];
+  const r = suggestNextWeight({ workouts, ex: SUGGEST_EX, step: 2.5 });
+  assert.equal(r.weight, 20);
+  assert.equal(r.reason, 'hold');
+});
+
+test('suggestNextWeight: 重量がセット間で違う場合は最も重いセットを基準にする', () => {
+  // 20→22.5→25 と上げていった日。次は25kgを基準に判断する。
+  const workouts = [workoutWith('2026-08-01', [
+    { exId: 'chest', weight: 20, reps: 10 },
+    { exId: 'chest', weight: 22.5, reps: 10 },
+    { exId: 'chest', weight: 25, reps: 10 }
+  ])];
+  const r = suggestNextWeight({ workouts, ex: SUGGEST_EX, step: 2.5 });
+  // 25kgでは1セットしかやっていないので据え置き
+  assert.equal(r.weight, 25);
+  assert.equal(r.reason, 'hold');
+});
+
+test('suggestNextWeight: 履歴が無ければ null（提案しない）', () => {
+  assert.equal(suggestNextWeight({ workouts: [], ex: SUGGEST_EX, step: 2.5 }), null);
+  assert.equal(suggestNextWeight({ workouts: null, ex: SUGGEST_EX, step: 2.5 }), null);
+  const other = [workoutWith('2026-08-01', [{ exId: 'back', weight: 30, reps: 10 }])];
+  assert.equal(suggestNextWeight({ workouts: other, ex: SUGGEST_EX, step: 2.5 }), null);
+});
+
+test('suggestNextWeight: 直近の記録だけを見る（古い記録に引きずられない）', () => {
+  const workouts = [
+    workoutWith('2026-07-01', [
+      { exId: 'chest', weight: 40, reps: 10 }, { exId: 'chest', weight: 40, reps: 10 }, { exId: 'chest', weight: 40, reps: 10 }
+    ]),
+    workoutWith('2026-08-01', [
+      { exId: 'chest', weight: 20, reps: 10 }, { exId: 'chest', weight: 20, reps: 10 }, { exId: 'chest', weight: 20, reps: 10 }
+    ])
+  ];
+  const r = suggestNextWeight({ workouts, ex: SUGGEST_EX, step: 2.5 });
+  assert.equal(r.weight, 22.5, '直近(8/1)の20kgを基準にする');
+});
+
+test('suggestNextWeight: 壊れたレコード・不正な日付を読み飛ばす', () => {
+  const workouts = [
+    null,
+    { id: 'x', date: 'いつか', sets: [{ exId: 'chest', weight: 99, reps: 10 }] },
+    { id: 'y', date: '2026-08-01', sets: 'garbage' },
+    workoutWith('2026-08-01', [
+      { exId: 'chest', weight: 20, reps: 10 }, { exId: 'chest', weight: 20, reps: 10 }, { exId: 'chest', weight: 20, reps: 10 }
+    ])
+  ];
+  const r = suggestNextWeight({ workouts, ex: SUGGEST_EX, step: 2.5 });
+  assert.equal(r.weight, 22.5);
+});
+
+test('suggestNextWeight: 1.25kg刻みでも浮動小数点の誤差を出さない', () => {
+  const workouts = [workoutWith('2026-08-01', [
+    { exId: 'chest', weight: 20, reps: 10 }, { exId: 'chest', weight: 20, reps: 10 }, { exId: 'chest', weight: 20, reps: 10 }
+  ])];
+  assert.equal(suggestNextWeight({ workouts, ex: SUGGEST_EX, step: 1.25 }).weight, 21.25);
 });

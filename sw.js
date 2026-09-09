@@ -1,4 +1,4 @@
-const CACHE = 'muscle-tracker-v18';
+const CACHE = 'muscle-tracker-v19';
 
 const ASSETS = [
   './',

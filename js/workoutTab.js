@@ -350,7 +350,12 @@ function switchProgram(program) {
   }
   // date/startedAt はそのまま引き継ぐ: バックデート入力中にプログラムを切り替えても
   // 記録対象の日付が今日に巻き戻ってしまわないようにする。
-  session = { program, date: session.date, startedAt: session.startedAt, sets: [] };
+  // extraExIds も空に戻す。切り替え先が B なら、A の日に足していた B の種目は
+  // B のプログラム標準に含まれるため、残すと同じ種目が二重に並ぶ。
+  // ここで明示的に空配列を入れないと undefined になり、EMPTY_SESSION・startSession と
+  // セッションの形が食い違う(描画側は ?? [] で守っているが、形の不一致を
+  // 呼び出し側の防御に頼らない)。
+  session = { program, date: session.date, startedAt: session.startedAt, sets: [], extraExIds: [] };
   persistSession();
   renderWorkoutTab();
 }

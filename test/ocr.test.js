@@ -5,7 +5,7 @@
 // 実装を変えたら、この記録も実際に壊して数え直すこと。
 // MUTATION: js/ocr.js:parseBody の「全項目が正の有限数」検査を外す => 期待失敗 2件
 // MUTATION: js/ocr.js:parseItems の items.length===0 検査を外す => 期待失敗 1件
-// MUTATION: js/ocr.js:callGeminiRaw の instanceof File 検査を外す => 期待失敗 ?件
+// MUTATION: js/ocr.js:callGeminiRaw の instanceof File 検査を外す => 期待失敗 1件
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseItems, parseBody, OcrError, analyzeMealPhoto, analyzeReceipt, analyzeInbody } from '../js/ocr.js';

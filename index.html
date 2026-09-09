@@ -20,7 +20,7 @@
   - script-src 'self': js/charts.js が vendor/chart.umd.js を動的に <script> 注入する。
     同一オリジンなので 'self' で足りる。インラインスクリプトは0件なので許可しない。
   - style-src に 'unsafe-inline' が必要なのは style="..." 属性を91箇所で使っているため。
-    これを外すには全てクラスへ移す必要がある(未実施・要求として起票済み)。
+    これを外すには全てクラスへ移す必要がある(docs/SPEC.md の R2.7.8・未実装)。
   - img-src の blob:/data: は IndexedDB から復元した体の写真とキャンバス出力の表示用。
   - media-src blob: はカメラプレビュー用。
   - object-src 'none' / base-uri 'self' / form-action 'none' は既定の締め。
